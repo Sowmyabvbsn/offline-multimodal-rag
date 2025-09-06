@@ -1,0 +1,88 @@
+# Virtual environment
+offline_ai_env/
+venv/
+env/
+.env
+
+# Model files (too large for git)
+models/
+*.bin
+*.safetensors
+*.onnx
+
+# Data files (user content)
+data/
+logs/
+*.db
+*.sqlite
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Large files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Local configuration
+config.local.py
+secrets.py
+.secrets
+
+# Test files
+test_data/
+sample_files/
