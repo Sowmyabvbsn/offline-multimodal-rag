@@ -158,18 +158,19 @@ class OfflineAIAgent:
                 # Use ultra-fast mode for simple questions
                 response = self.qa_chain.quick_ask(question)
                 sources = ["Quick response mode - limited context"]
+                images = []
             else:
                 # Standard mode
-                response, sources, metadata = self.qa_chain.ask(question)
+                response, sources, metadata, images = self.qa_chain.ask(question)
             
             # Log the conversation (thread-safe)
             self.db.log_conversation(question, response, sources)
             
-            return response, sources
+            return response, sources, metadata, images
         except Exception as e:
             error_msg = f"Error processing question: {str(e)}"
             print(error_msg)
-            return error_msg, []
+            return error_msg, [], [], []
     
     def test_dependencies(self):
         """Test if all required packages are installed"""
@@ -298,7 +299,7 @@ class OfflineAIAgent:
             demo.launch(
                 server_name="127.0.0.1", 
                 server_port=7860, 
-                share=False,
+                share=True,
                 show_error=True,
                 quiet=False
             )

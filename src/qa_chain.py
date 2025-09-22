@@ -3,6 +3,8 @@ import requests
 import json
 from typing import List, Tuple, Dict, Optional
 import time
+import os
+import base64
 
 class QAChain:
     def __init__(self, vector_store, model_name="mistral", ollama_url="http://localhost:11434"):
@@ -107,7 +109,7 @@ class QAChain:
         
         # Shorter, more direct prompt
         prompt_parts = []
-        prompt_parts.append("Answer the question based on the provided context. Be concise and direct.")
+        prompt_parts.append("Answer the question based on the provided context. Be concise and direct. Always cite your sources with specific page numbers when available.")
         
         if context_text:
             prompt_parts.append(f"Context:\n{context_text}")
@@ -115,11 +117,62 @@ class QAChain:
             prompt_parts.append("No relevant context found.")
         
         prompt_parts.append(f"Question: {question}")
-        prompt_parts.append("Answer:")
+        prompt_parts.append("Answer (include citations with page numbers):")
         
         return "\n".join(prompt_parts)
     
-    def ask(self, question: str, k: int = 3, include_history: bool = False, temperature: float = 0.3) -> Tuple[str, List[str], List[Dict]]:
+    def format_citations(self, response: str, metadata: List[Dict]) -> str:
+        """Format response with stronger citations"""
+        if not metadata:
+            return response
+        
+        # Create detailed citation information
+        citations = []
+        for i, meta in enumerate(metadata, 1):
+            source_name = os.path.basename(meta['source'])
+            page = meta.get('page', 1)
+            doc_type = meta.get('type', 'document')
+            
+            if doc_type == 'pdf':
+                citation = f"[{i}] {source_name}, Page {page}"
+            elif doc_type == 'image':
+                confidence = meta.get('confidence', 0)
+                citation = f"[{i}] {source_name} (OCR, {confidence:.1f}% confidence)"
+            elif doc_type == 'audio':
+                duration = meta.get('duration')
+                if duration:
+                    citation = f"[{i}] {source_name} (Audio, {duration:.1f}s)"
+                else:
+                    citation = f"[{i}] {source_name} (Audio)"
+            else:
+                citation = f"[{i}] {source_name}"
+            
+            citations.append(citation)
+        
+        # Add citations to response
+        citation_text = "\n\n**Sources:**\n" + "\n".join(citations)
+        return response + citation_text
+    
+    def get_relevant_images(self, metadata: List[Dict]) -> List[Dict]:
+        """Extract relevant images from metadata"""
+        relevant_images = []
+        
+        for meta in metadata:
+            if meta.get('has_images', False):
+                images = meta.get('images', [])
+                for img in images:
+                    img_info = {
+                        'path': img['path'],
+                        'filename': img['filename'],
+                        'source': os.path.basename(meta['source']),
+                        'page': meta.get('page', 1),
+                        'size': img.get('size', (0, 0))
+                    }
+                    relevant_images.append(img_info)
+        
+        return relevant_images
+    
+    def ask(self, question: str, k: int = 3, include_history: bool = False, temperature: float = 0.3) -> Tuple[str, List[str], List[Dict], List[Dict]]:
         """Ask a question with optimized settings for speed"""
         print(f"\n❓ Question: {question}")
         
@@ -128,22 +181,29 @@ class QAChain:
         
         if not contexts:
             response = "I don't have any relevant documents to answer this question. Please add some documents to the knowledge base first."
-            return response, [], []
+            return response, [], [], []
         
         # Generate response with optimized prompt
         prompt = self.create_prompt(question, contexts, include_history)
         response = self.generate_response(prompt, temperature, max_tokens=500)  # Shorter responses
         
+        # Format response with stronger citations
+        response = self.format_citations(response, metadata)
+        
         # Extract sources
         sources = [meta['source'] for meta in metadata]
         unique_sources = list(dict.fromkeys(sources))  # Remove duplicates while preserving order
+        
+        # Get relevant images
+        relevant_images = self.get_relevant_images(metadata)
         
         # Add to conversation history
         self.conversation_history.append({
             'question': question,
             'answer': response,
             'sources': unique_sources,
-            'context_count': len(contexts)
+            'context_count': len(contexts),
+            'images': relevant_images
         })
         
         # Keep only last 5 conversations in history (reduced from 10)
@@ -151,8 +211,10 @@ class QAChain:
             self.conversation_history = self.conversation_history[-5:]
         
         print(f"✅ Answer generated using {len(contexts)} context chunks from {len(unique_sources)} sources")
+        if relevant_images:
+            print(f"🖼️ Found {len(relevant_images)} relevant images")
         
-        return response, unique_sources, metadata
+        return response, unique_sources, metadata, relevant_images
     
     def quick_ask(self, question: str) -> str:
         """Ultra-fast question answering with minimal context"""

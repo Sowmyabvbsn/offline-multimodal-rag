@@ -2,31 +2,39 @@
 import gradio as gr
 from typing import Any, List, Tuple
 import os
+import shutil
+import tempfile
 
 def launch_gradio_interface(agent: Any):
     """Launch Gradio web interface"""
     
-    def chat_interface(message, history):
+    def chat_interface(message, history, show_images):
         """Chat interface function"""
         if not message.strip():
             return history, ""
         
         try:
-            response, sources = agent.ask_question(message)
+            response, sources, metadata, relevant_images = agent.ask_question(message)
             
-            # Format response with sources
-            if sources:
-                unique_sources = list(dict.fromkeys(sources))  # Remove duplicates
-                source_names = [os.path.basename(src) for src in unique_sources]
-                response += f"\n\n📚 **Sources:** {', '.join(source_names)}"
+            # Add images to response if requested and available
+            if show_images and relevant_images:
+                response += f"\n\n🖼️ **Relevant Images ({len(relevant_images)} found):**"
+                for img in relevant_images[:3]:  # Limit to 3 images
+                    response += f"\n• {img['filename']} (from {img['source']}, Page {img['page']})"
             
             history.append([message, response])
-            return history, ""
+            
+            # Return images for display if requested
+            image_paths = []
+            if show_images and relevant_images:
+                image_paths = [img['path'] for img in relevant_images[:3]]
+            
+            return history, "", image_paths
             
         except Exception as e:
             error_response = f"❌ Error: {str(e)}"
             history.append([message, error_response])
-            return history, ""
+            return history, "", []
     
     def process_documents():
         """Process documents function"""
@@ -36,7 +44,7 @@ def launch_gradio_interface(agent: Any):
         except Exception as e:
             return f"❌ Error processing documents: {str(e)}"
     
-    def upload_file(files):
+    def upload_files(files):
         """Handle file uploads"""
         if not files:
             return "No files selected"
@@ -46,7 +54,14 @@ def launch_gradio_interface(agent: Any):
         
         for file in files:
             try:
-                filename = os.path.basename(file.name)
+                # Handle both file path string and file object
+                if hasattr(file, 'name'):
+                    file_path = file.name
+                    filename = os.path.basename(file_path)
+                else:
+                    file_path = file
+                    filename = os.path.basename(file_path)
+                
                 file_ext = os.path.splitext(filename)[1].lower()
                 
                 # Determine destination folder
@@ -64,15 +79,14 @@ def launch_gradio_interface(agent: Any):
                 dest_path = dest_folder / filename
                 dest_folder.mkdir(parents=True, exist_ok=True)
                 
-                # Read and write file
-                with open(file.name, 'rb') as src, open(dest_path, 'wb') as dst:
-                    dst.write(src.read())
+                # Copy file using shutil for better reliability
+                shutil.copy2(file_path, dest_path)
                 
                 uploaded_count += 1
                 messages.append(f"✅ Uploaded: {filename}")
                 
             except Exception as e:
-                messages.append(f"❌ Error uploading {filename}: {str(e)}")
+                messages.append(f"❌ Error uploading {getattr(file, 'name', str(file))}: {str(e)}")
         
         result = f"📁 Uploaded {uploaded_count} files\n" + "\n".join(messages)
         return result
@@ -144,6 +158,17 @@ def launch_gradio_interface(agent: Any):
                     elem_classes=["chat-container"]
                 )
                 
+                # Image display area
+                image_gallery = gr.Gallery(
+                    label="🖼️ Relevant Images",
+                    show_label=True,
+                    elem_id="image-gallery",
+                    columns=3,
+                    rows=1,
+                    height="auto",
+                    visible=False
+                )
+                
                 with gr.Row():
                     msg = gr.Textbox(
                         label="Your Question",
@@ -153,16 +178,23 @@ def launch_gradio_interface(agent: Any):
                     )
                     send_btn = gr.Button("Send 📤", scale=1, variant="primary")
                     clear_btn = gr.Button("Clear 🗑️", scale=1)
+                
+                with gr.Row():
+                    show_images_checkbox = gr.Checkbox(
+                        label="Show relevant images in responses",
+                        value=False
+                    )
             
             with gr.Column(scale=1):
                 # Control panel
                 gr.Markdown("## 🛠️ Control Panel")
                 
                 # File upload
-                file_upload = gr.Files(
+                file_upload = gr.File(
                     label="📁 Upload Files",
                     file_types=[".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".wav", ".mp3", ".m4a", ".flac"],
-                    file_count="multiple"
+                    file_count="multiple",
+                    type="filepath"
                 )
                 upload_btn = gr.Button("Upload Files 📤", variant="secondary")
                 upload_status = gr.Textbox(label="Upload Status", lines=3, interactive=False)
@@ -176,16 +208,30 @@ def launch_gradio_interface(agent: Any):
                 system_status = gr.Textbox(label="System Status", lines=8, interactive=False)
         
         # Event handlers
-        def submit_message(message, history):
-            return chat_interface(message, history)
+        def submit_message(message, history, show_images):
+            new_history, empty_msg, images = chat_interface(message, history, show_images)
+            # Show/hide image gallery based on whether images are found
+            gallery_visible = len(images) > 0 if images else False
+            return new_history, empty_msg, images, gr.update(visible=gallery_visible)
+        
+        def clear_chat():
+            return [], gr.update(visible=False)
         
         # Chat events
-        msg.submit(submit_message, inputs=[msg, chatbot], outputs=[chatbot, msg])
-        send_btn.click(submit_message, inputs=[msg, chatbot], outputs=[chatbot, msg])
-        clear_btn.click(clear_chat, outputs=[chatbot])
+        msg.submit(
+            submit_message, 
+            inputs=[msg, chatbot, show_images_checkbox], 
+            outputs=[chatbot, msg, image_gallery, image_gallery]
+        )
+        send_btn.click(
+            submit_message, 
+            inputs=[msg, chatbot, show_images_checkbox], 
+            outputs=[chatbot, msg, image_gallery, image_gallery]
+        )
+        clear_btn.click(clear_chat, outputs=[chatbot, image_gallery])
         
         # File upload events
-        upload_btn.click(upload_file, inputs=[file_upload], outputs=[upload_status])
+        upload_btn.click(upload_files, inputs=[file_upload], outputs=[upload_status])
         
         # Processing events
         process_btn.click(process_documents, outputs=[process_status])
@@ -201,11 +247,17 @@ def launch_gradio_interface(agent: Any):
         2. **Click "Process Documents"** to analyze your content
         3. **Ask questions** about your uploaded content
         4. **Check "System Status"** to see what's been processed
+        5. **Enable "Show relevant images"** to see document images in responses
         
         ### 📝 Supported Formats
         - **Documents:** PDF
         - **Images:** PNG, JPG, JPEG, BMP, TIFF (with OCR)
         - **Audio:** WAV, MP3, M4A, FLAC (with speech-to-text)
+        
+        ### 🖼️ Image Features
+        - **PDF Images:** Automatically extracted and displayed when relevant
+        - **Strong Citations:** Detailed source references with page numbers
+        - **Visual Context:** See the actual images from your documents
         """)
     
     return demo
