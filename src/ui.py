@@ -8,6 +8,9 @@ import tempfile
 def launch_gradio_interface(agent: Any):
     """Launch Gradio web interface"""
     
+    # Store uploaded files temporarily
+    uploaded_files = []
+    
     def chat_interface(message, history, show_images):
         """Chat interface function"""
         if not message.strip():
@@ -36,16 +39,9 @@ def launch_gradio_interface(agent: Any):
             history.append([message, error_response])
             return history, "", []
     
-    def process_documents():
-        """Process documents function"""
-        try:
-            agent.process_documents()
-            return "✅ Documents processed successfully! You can now ask questions about your content."
-        except Exception as e:
-            return f"❌ Error processing documents: {str(e)}"
-    
     def upload_files(files):
         """Handle file uploads"""
+        nonlocal uploaded_files
         if not files:
             return "No files selected"
         
@@ -82,6 +78,13 @@ def launch_gradio_interface(agent: Any):
                 # Copy file using shutil for better reliability
                 shutil.copy2(file_path, dest_path)
                 
+                # Track uploaded files
+                uploaded_files.append({
+                    'path': str(dest_path),
+                    'type': file_ext,
+                    'filename': filename
+                })
+                
                 uploaded_count += 1
                 messages.append(f"✅ Uploaded: {filename}")
                 
@@ -89,7 +92,100 @@ def launch_gradio_interface(agent: Any):
                 messages.append(f"❌ Error uploading {getattr(file, 'name', str(file))}: {str(e)}")
         
         result = f"📁 Uploaded {uploaded_count} files\n" + "\n".join(messages)
+        if uploaded_count > 0:
+            result += f"\n\n💡 Click 'Process Documents' to analyze these files"
         return result
+    
+    def process_uploaded_documents():
+        """Process only the uploaded documents"""
+        nonlocal uploaded_files
+        try:
+            if not uploaded_files:
+                return "❌ No files uploaded yet. Please upload files first."
+            
+            # Initialize components if needed
+            agent._initialize_components()
+            
+            # Process uploaded files by type
+            all_chunks = []
+            processed_count = 0
+            
+            # Group files by type
+            pdf_files = [f for f in uploaded_files if f['type'] == '.pdf']
+            image_files = [f for f in uploaded_files if f['type'] in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif']]
+            audio_files = [f for f in uploaded_files if f['type'] in ['.wav', '.mp3', '.m4a', '.flac', '.aac']]
+            
+            # Process PDFs
+            if pdf_files:
+                for pdf_file in pdf_files:
+                    chunks = agent.doc_processor.process_pdf(pdf_file['path'])
+                    if chunks:
+                        agent.vector_store.add_documents(chunks, "pdf")
+                        all_chunks.extend(chunks)
+                        processed_count += 1
+            
+            # Process Images
+            if image_files:
+                for img_file in image_files:
+                    chunks = agent.image_processor.process_image(img_file['path'])
+                    if chunks:
+                        agent.vector_store.add_documents(chunks, "image")
+                        all_chunks.extend(chunks)
+                        processed_count += 1
+            
+            # Process Audio
+            if audio_files:
+                for audio_file in audio_files:
+                    chunks = agent.audio_processor.process_audio(audio_file['path'])
+                    if chunks:
+                        agent.vector_store.add_documents(chunks, "audio")
+                        all_chunks.extend(chunks)
+                        processed_count += 1
+            
+            # Save the vector store
+            if all_chunks:
+                agent.vector_store.save()
+                result = f"✅ Successfully processed {processed_count} files!\n"
+                result += f"📊 Created {len(all_chunks)} text chunks\n"
+                result += f"🔍 Ready to answer questions about your content"
+                
+                # Clear uploaded files list since they're now processed
+                uploaded_files = []
+                return result
+            else:
+                return "⚠️ No content could be extracted from the uploaded files"
+                
+        except Exception as e:
+            return f"❌ Error processing documents: {str(e)}"
+    
+    def process_documents():
+        """Process documents function - prioritize uploaded files"""
+        try:
+            # Always try uploaded files first
+            if uploaded_files:
+                return process_uploaded_documents()
+            
+            # Only check data directories if no files uploaded
+            has_files = False
+            pdf_dir = agent.data_dir / "pdfs"
+            img_dir = agent.data_dir / "images"
+            audio_dir = agent.data_dir / "audio"
+            
+            if pdf_dir.exists() and list(pdf_dir.glob("*.pdf")):
+                has_files = True
+            if img_dir.exists() and any(f.suffix.lower() in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', '.webp'] for f in img_dir.glob("*")):
+                has_files = True
+            if audio_dir.exists() and any(f.suffix.lower() in ['.wav', '.mp3', '.m4a', '.flac', '.aac', '.ogg'] for f in audio_dir.glob("*")):
+                has_files = True
+            
+            if has_files:
+                agent.process_documents()
+                return "✅ Documents from data folders processed successfully! You can now ask questions about your content."
+            else:
+                return "⚠️ No files found to process. Please upload files using the file uploader above, then click 'Process Documents'."
+                
+        except Exception as e:
+            return f"❌ Error processing documents: {str(e)}"
     
     def get_system_status():
         """Get current system status"""
@@ -203,6 +299,9 @@ def launch_gradio_interface(agent: Any):
                 process_btn = gr.Button("Process Documents 🔄", variant="primary")
                 process_status = gr.Textbox(label="Processing Status", lines=2, interactive=False)
                 
+                # Clear uploaded files
+                clear_files_btn = gr.Button("Clear Uploaded Files 🗑️", variant="secondary")
+                
                 # System status
                 status_btn = gr.Button("System Status 📊", variant="secondary")
                 system_status = gr.Textbox(label="System Status", lines=8, interactive=False)
@@ -216,6 +315,11 @@ def launch_gradio_interface(agent: Any):
         
         def clear_chat():
             return [], gr.update(visible=False)
+        
+        def clear_uploaded_files():
+            nonlocal uploaded_files
+            uploaded_files = []
+            return "🗑️ Cleared all uploaded files. Upload new files to process."
         
         # Chat events
         msg.submit(
@@ -236,6 +340,9 @@ def launch_gradio_interface(agent: Any):
         # Processing events
         process_btn.click(process_documents, outputs=[process_status])
         
+        # Clear files events
+        clear_files_btn.click(clear_uploaded_files, outputs=[upload_status])
+        
         # Status events
         status_btn.click(get_system_status, outputs=[system_status])
         
@@ -243,11 +350,23 @@ def launch_gradio_interface(agent: Any):
         gr.Markdown("""
         ## 🚀 Getting Started
         
-        1. **Upload your files** using the file uploader (PDFs, images, audio)
+        1. **Upload your files** using the file uploader above (PDFs, images, audio)
         2. **Click "Process Documents"** to analyze your content
         3. **Ask questions** about your uploaded content
         4. **Check "System Status"** to see what's been processed
         5. **Enable "Show relevant images"** to see document images in responses
+        
+        ### 💡 How It Works
+        - **Upload files first** using the file uploader
+        - **Then click "Process Documents"** to analyze them
+        - Files are processed **immediately** - no restart needed
+        - Upload multiple files at once for batch processing
+        - Use "Clear Uploaded Files" to reset and upload new files
+        
+        ### ⚠️ Important Notes
+        - **Always upload files first** before clicking "Process Documents"
+        - The system processes **uploaded files**, not files in data/ folders
+        - If no files are uploaded, you'll get a "no files found" message
         
         ### 📝 Supported Formats
         - **Documents:** PDF

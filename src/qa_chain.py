@@ -176,6 +176,10 @@ class QAChain:
         """Ask a question with optimized settings for speed"""
         print(f"\n❓ Question: {question}")
         
+        # Check if vector store has documents
+        if not hasattr(self.vector_store, 'index') or self.vector_store.index is None or self.vector_store.index.ntotal == 0:
+            return "❌ No documents available. Please upload and process some documents first.", [], [], []
+        
         # Retrieve fewer contexts for faster processing
         contexts, metadata = self.vector_store.search(question, k)
         

@@ -153,6 +153,10 @@ class OfflineAIAgent:
         """Ask a question with optional quick mode for faster responses"""
         self._initialize_components()
         
+        # Check if vector store has any documents
+        if not hasattr(self.vector_store, 'index') or self.vector_store.index is None or self.vector_store.index.ntotal == 0:
+            return "❌ No documents have been processed yet. Please upload and process some documents first.", [], {}, []
+        
         try:
             if quick_mode and hasattr(self.qa_chain, 'quick_ask'):
                 # Use ultra-fast mode for simple questions
@@ -171,6 +175,29 @@ class OfflineAIAgent:
             error_msg = f"Error processing question: {str(e)}"
             print(error_msg)
             return error_msg, [], [], []
+    
+    def process_single_file(self, file_path: str, file_type: str):
+        """Process a single uploaded file"""
+        self._initialize_components()
+        
+        chunks = []
+        if file_type == 'pdf':
+            chunks = self.doc_processor.process_pdf(file_path)
+            if chunks:
+                self.vector_store.add_documents(chunks, "pdf")
+        elif file_type == 'image':
+            chunks = self.image_processor.process_image(file_path)
+            if chunks:
+                self.vector_store.add_documents(chunks, "image")
+        elif file_type == 'audio':
+            chunks = self.audio_processor.process_audio(file_path)
+            if chunks:
+                self.vector_store.add_documents(chunks, "audio")
+        
+        if chunks:
+            self.vector_store.save()
+            return len(chunks)
+        return 0
     
     def test_dependencies(self):
         """Test if all required packages are installed"""
@@ -295,6 +322,7 @@ class OfflineAIAgent:
         if interface_type == "gradio":
             print("🌐 Starting Gradio web interface...")
             print(f"⚡ Optimized for {self.model_name}")
+            print("💡 Upload files using the web interface - no need to add files to data/ folders")
             demo = launch_gradio_interface(self)
             demo.launch(
                 server_name="127.0.0.1", 
