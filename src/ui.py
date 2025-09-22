@@ -1,473 +1,258 @@
-# src/ui.py
-import gradio as gr
-from typing import Any, List, Tuple
+# src/qa_chain.py - Optimized for Speed
+import requests
+import json
+from typing import List, Tuple, Dict, Optional
+import time
 import os
-import shutil
-import tempfile
+import base64
 
-def launch_gradio_interface(agent: Any):
-    """Launch Gradio web interface"""
-    
-    # Store uploaded files temporarily
-    uploaded_files = []
-    
-    def chat_interface(message, history, show_images):
-        """Chat interface function"""
-        if not message.strip():
-            return history, ""
+class QAChain:
+    def __init__(self, vector_store, model_name="mistral", ollama_url="http://localhost:11434"):
+        self.vector_store = vector_store
+        self.model_name = model_name
+        self.ollama_url = ollama_url
+        self.conversation_history = []
         
+        print(f"🤖 QA Chain initialized with model: {model_name}")
+        print(f"🔗 Ollama URL: {ollama_url}")
+        
+        # Test connection
+        self._test_connection()
+    
+    def _test_connection(self):
+        """Test connection to Ollama"""
         try:
-            response, sources, metadata, relevant_images = agent.ask_question(message)
-            
-            # Add images to response if requested and available
-            if show_images and relevant_images:
-                response += f"\n\n🖼️ **Relevant Images ({len(relevant_images)} found):**"
-                for img in relevant_images[:3]:  # Limit to 3 images
-                    response += f"\n• {img['filename']} (from {img['source']}, Page {img['page']})"
-            
-            history.append([message, response])
-            
-            # Return images for display if requested
-            image_paths = []
-            if show_images and relevant_images:
-                image_paths = [img['path'] for img in relevant_images[:3]]
-            
-            return history, "", image_paths
-            
-        except Exception as e:
-            error_response = f"❌ Error: {str(e)}"
-            history.append([message, error_response])
-            return history, "", []
-    
-    def upload_files(files):
-        """Handle file uploads"""
-        nonlocal uploaded_files
-        if not files:
-            return "No files selected"
-        
-        uploaded_count = 0
-        messages = []
-        
-        for file in files:
-            try:
-                # Handle both file path string and file object
-                if hasattr(file, 'name'):
-                    file_path = file.name
-                    filename = os.path.basename(file_path)
+            response = requests.get(f"{self.ollama_url}/api/tags", timeout=5)
+            if response.status_code == 200:
+                models = response.json().get('models', [])
+                available_models = [m['name'] for m in models]
+                
+                if self.model_name in available_models or any(self.model_name in m for m in available_models):
+                    print(f"✅ Ollama connected, model '{self.model_name}' available")
                 else:
-                    file_path = file
-                    filename = os.path.basename(file_path)
+                    print(f"⚠️  Model '{self.model_name}' not found. Available: {available_models}")
+                    print(f"💡 Run: ollama pull {self.model_name}")
+            else:
+                print(f"❌ Ollama connection error: {response.status_code}")
+        except Exception as e:
+            print(f"❌ Cannot connect to Ollama: {e}")
+            print("💡 Make sure Ollama is running: ollama serve")
+    
+    def generate_response(self, prompt: str, temperature: float = 0.3, max_tokens: int = 800) -> str:
+        """Generate response using local Ollama model with optimized settings"""
+        try:
+            # Optimized payload for faster responses
+            payload = {
+                "model": self.model_name,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": max_tokens,
+                    "top_k": 20,
+                    "top_p": 0.8,
+                    "repeat_penalty": 1.1,
+                    "num_ctx": 2048  # Reduce context window for speed
+                }
+            }
+            
+            print(f"🤔 Generating response with {self.model_name}...")
+            start_time = time.time()
+            
+            response = requests.post(
+                f"{self.ollama_url}/api/generate",
+                json=payload,
+                timeout=180  # Increased timeout to 3 minutes
+            )
+            
+            end_time = time.time()
+            
+            if response.status_code == 200:
+                result = response.json()
+                generated_text = result.get('response', '').strip()
                 
-                file_ext = os.path.splitext(filename)[1].lower()
+                # Get generation stats
+                total_duration = result.get('total_duration', 0) / 1e9  # Convert to seconds
+                eval_count = result.get('eval_count', 0)
                 
-                # Determine destination folder
-                if file_ext == '.pdf':
-                    dest_folder = agent.data_dir / "pdfs"
-                elif file_ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif']:
-                    dest_folder = agent.data_dir / "images"
-                elif file_ext in ['.wav', '.mp3', '.m4a', '.flac', '.aac']:
-                    dest_folder = agent.data_dir / "audio"
+                print(f"✅ Response generated in {end_time - start_time:.1f}s")
+                if eval_count > 0 and total_duration > 0:
+                    print(f"📊 Tokens: {eval_count}, Speed: {eval_count/total_duration:.1f} tokens/s")
+                
+                return generated_text
+            else:
+                error_msg = f"Ollama API error: {response.status_code}"
+                print(f"❌ {error_msg}")
+                return error_msg
+        
+        except requests.exceptions.Timeout:
+            return "⏰ Request timed out. Try asking a simpler question or switch to a faster model like 'phi3:mini'."
+        except Exception as e:
+            error_msg = f"Error connecting to Ollama: {str(e)}"
+            print(f"❌ {error_msg}")
+            return error_msg
+    
+    def create_prompt(self, question: str, contexts: List[str], include_history: bool = False) -> str:
+        """Create an optimized prompt for faster processing"""
+        
+        # Limit context to most relevant chunks and shorter length
+        limited_contexts = contexts[:3]  # Only use top 3 most relevant
+        context_text = ""
+        if limited_contexts:
+            # Truncate long contexts
+            truncated_contexts = []
+            for i, ctx in enumerate(limited_contexts):
+                if len(ctx) > 500:  # Limit context length
+                    ctx = ctx[:500] + "..."
+                truncated_contexts.append(f"Context {i+1}: {ctx}")
+            context_text = "\n\n".join(truncated_contexts)
+        
+        # Shorter, more direct prompt
+        prompt_parts = []
+        prompt_parts.append("Answer the question based on the provided context. Be concise and direct. Always cite your sources with specific page numbers when available.")
+        
+        if context_text:
+            prompt_parts.append(f"Context:\n{context_text}")
+        else:
+            prompt_parts.append("No relevant context found.")
+        
+        prompt_parts.append(f"Question: {question}")
+        prompt_parts.append("Answer (include citations with page numbers):")
+        
+        return "\n".join(prompt_parts)
+    
+    def format_citations(self, response: str, metadata: List[Dict]) -> str:
+        """Format response with stronger citations"""
+        if not metadata:
+            return response
+        
+        # Create detailed citation information
+        citations = []
+        for i, meta in enumerate(metadata, 1):
+            source_name = os.path.basename(meta['source'])
+            page = meta.get('page', 1)
+            doc_type = meta.get('type', 'document')
+            
+            if doc_type == 'pdf':
+                citation = f"[{i}] {source_name}, Page {page}"
+            elif doc_type == 'image':
+                confidence = meta.get('confidence', 0)
+                citation = f"[{i}] {source_name} (OCR, {confidence:.1f}% confidence)"
+            elif doc_type == 'audio':
+                duration = meta.get('duration')
+                if duration:
+                    citation = f"[{i}] {source_name} (Audio, {duration:.1f}s)"
                 else:
-                    messages.append(f"⚠️ Unsupported file type: {filename}")
-                    continue
-                
-                # Copy file to destination
-                dest_path = dest_folder / filename
-                dest_folder.mkdir(parents=True, exist_ok=True)
-                
-                # Copy file using shutil for better reliability
-                shutil.copy2(file_path, dest_path)
-                
-                # Track uploaded files
-                uploaded_files.append({
-                    'path': str(dest_path),
-                    'type': file_ext,
-                    'filename': filename
-                })
-                
-                uploaded_count += 1
-                messages.append(f"✅ Uploaded: {filename}")
-                
-            except Exception as e:
-                messages.append(f"❌ Error uploading {getattr(file, 'name', str(file))}: {str(e)}")
-        
-        result = f"📁 Uploaded {uploaded_count} files\n" + "\n".join(messages)
-        if uploaded_count > 0:
-            result += f"\n\n💡 Click 'Process Documents' to analyze these files"
-        return result
-    
-    def process_uploaded_documents():
-        """Process only the uploaded documents"""
-        nonlocal uploaded_files
-        try:
-            if not uploaded_files:
-                return "❌ No files uploaded yet. Please upload files first."
-            
-            # Initialize components if needed
-            agent._initialize_components()
-            
-            # Process uploaded files by type
-            all_chunks = []
-            processed_count = 0
-            
-            # Group files by type
-            pdf_files = [f for f in uploaded_files if f['type'] == '.pdf']
-            image_files = [f for f in uploaded_files if f['type'] in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif']]
-            audio_files = [f for f in uploaded_files if f['type'] in ['.wav', '.mp3', '.m4a', '.flac', '.aac']]
-            
-            # Process PDFs
-            if pdf_files:
-                for pdf_file in pdf_files:
-                    chunks = agent.doc_processor.process_pdf(pdf_file['path'])
-                    if chunks:
-                        agent.vector_store.add_documents(chunks, "pdf")
-                        all_chunks.extend(chunks)
-                        processed_count += 1
-            
-            # Process Images
-            if image_files:
-                for img_file in image_files:
-                    chunks = agent.image_processor.process_image(img_file['path'])
-                    if chunks:
-                        agent.vector_store.add_documents(chunks, "image")
-                        all_chunks.extend(chunks)
-                        processed_count += 1
-            
-            # Process Audio
-            if audio_files:
-                for audio_file in audio_files:
-                    chunks = agent.audio_processor.process_audio(audio_file['path'])
-                    if chunks:
-                        agent.vector_store.add_documents(chunks, "audio")
-                        all_chunks.extend(chunks)
-                        processed_count += 1
-            
-            # Save the vector store
-            if all_chunks:
-                agent.vector_store.save()
-                result = f"✅ Successfully processed {processed_count} files!\n"
-                result += f"📊 Created {len(all_chunks)} text chunks\n"
-                result += f"🔍 Ready to answer questions about your content"
-                
-                # Clear uploaded files list since they're now processed
-                uploaded_files = []
-                return result
+                    citation = f"[{i}] {source_name} (Audio)"
             else:
-                return "⚠️ No content could be extracted from the uploaded files"
-                
-        except Exception as e:
-            return f"❌ Error processing documents: {str(e)}"
+                citation = f"[{i}] {source_name}"
+            
+            citations.append(citation)
+        
+        # Add citations to response
+        citation_text = "\n\n**Sources:**\n" + "\n".join(citations)
+        return response + citation_text
     
-    def process_documents():
-        """Process documents function - prioritize uploaded files"""
-        try:
-            # Always try uploaded files first
-            if uploaded_files:
-                return process_uploaded_documents()
-            
-            # Only check data directories if no files uploaded
-            has_files = False
-            pdf_dir = agent.data_dir / "pdfs"
-            img_dir = agent.data_dir / "images"
-            audio_dir = agent.data_dir / "audio"
-            
-            if pdf_dir.exists() and list(pdf_dir.glob("*.pdf")):
-                has_files = True
-            if img_dir.exists() and any(f.suffix.lower() in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', '.webp'] for f in img_dir.glob("*")):
-                has_files = True
-            if audio_dir.exists() and any(f.suffix.lower() in ['.wav', '.mp3', '.m4a', '.flac', '.aac', '.ogg'] for f in audio_dir.glob("*")):
-                has_files = True
-            
-            if has_files:
-                agent.process_documents()
-                return "✅ Documents from data folders processed successfully! You can now ask questions about your content."
-            else:
-                return "⚠️ No files found to process. Please upload files using the file uploader above, then click 'Process Documents'."
-                
-        except Exception as e:
-            return f"❌ Error processing documents: {str(e)}"
+    def get_relevant_images(self, metadata: List[Dict]) -> List[Dict]:
+        """Extract relevant images from metadata"""
+        relevant_images = []
+        
+        for meta in metadata:
+            if meta.get('has_images', False):
+                images = meta.get('images', [])
+                for img in images:
+                    img_info = {
+                        'path': img['path'],
+                        'filename': img['filename'],
+                        'source': os.path.basename(meta['source']),
+                        'page': meta.get('page', 1),
+                        'size': img.get('size', (0, 0))
+                    }
+                    relevant_images.append(img_info)
+        
+        return relevant_images
     
-    def get_system_status():
-        """Get current system status"""
-        try:
-            # Get document counts
-            pdf_count = len(list((agent.data_dir / "pdfs").glob("*.pdf"))) if (agent.data_dir / "pdfs").exists() else 0
-            img_count = len(list((agent.data_dir / "images").glob("*"))) if (agent.data_dir / "images").exists() else 0
-            audio_count = len(list((agent.data_dir / "audio").glob("*"))) if (agent.data_dir / "audio").exists() else 0
-            
-            # Get vector store stats
-            if hasattr(agent, 'vector_store') and agent.vector_store:
-                stats = agent.vector_store.get_stats()
-                doc_chunks = stats.get('total_documents', 0)
-                sources = len(stats.get('sources', []))
-            else:
-                doc_chunks = 0
-                sources = 0
-            
-            status = f"""📊 **System Status**
-            
-📁 **Files Available:**
-• PDFs: {pdf_count}
-• Images: {img_count}  
-• Audio: {audio_count}
+    def ask(self, question: str, k: int = 3, include_history: bool = False, temperature: float = 0.3) -> Tuple[str, List[str], List[Dict], List[Dict]]:
+        """Ask a question with optimized settings for speed"""
+        print(f"\n❓ Question: {question}")
+        
+        # Check if vector store has documents
+        if not hasattr(self.vector_store, 'index') or self.vector_store.index is None or self.vector_store.index.ntotal == 0:
+            return "❌ No documents available. Please upload and process some documents first.", [], [], []
+        
+        # Retrieve fewer contexts for faster processing
+        contexts, metadata = self.vector_store.search(question, k)
+        
+        if not contexts:
+            response = "I don't have any relevant documents to answer this question. Please add some documents to the knowledge base first."
+            return response, [], [], []
+        
+        # Generate response with optimized prompt
+        prompt = self.create_prompt(question, contexts, include_history)
+        response = self.generate_response(prompt, temperature, max_tokens=500)  # Shorter responses
+        
+        # Format response with stronger citations
+        response = self.format_citations(response, metadata)
+        
+        # Extract sources
+        sources = [meta['source'] for meta in metadata]
+        unique_sources = list(dict.fromkeys(sources))  # Remove duplicates while preserving order
+        
+        # Get relevant images
+        relevant_images = self.get_relevant_images(metadata)
+        
+        # Add to conversation history
+        self.conversation_history.append({
+            'question': question,
+            'answer': response,
+            'sources': unique_sources,
+            'context_count': len(contexts),
+            'images': relevant_images
+        })
+        
+        # Keep only last 5 conversations in history (reduced from 10)
+        if len(self.conversation_history) > 5:
+            self.conversation_history = self.conversation_history[-5:]
+        
+        print(f"✅ Answer generated using {len(contexts)} context chunks from {len(unique_sources)} sources")
+        if relevant_images:
+            print(f"🖼️ Found {len(relevant_images)} relevant images")
+        
+        return response, unique_sources, metadata, relevant_images
+    
+    def quick_ask(self, question: str) -> str:
+        """Ultra-fast question answering with minimal context"""
+        contexts, metadata = self.vector_store.search(question, k=1)  # Only 1 context
+        
+        if not contexts:
+            return "No relevant information found."
+        
+        # Ultra-simple prompt
+        prompt = f"Context: {contexts[0][:300]}...\nQuestion: {question}\nBrief answer:"
+        
+        return self.generate_response(prompt, temperature=0.1, max_tokens=200)
+    
+    def clear_history(self):
+        """Clear conversation history"""
+        self.conversation_history = []
+        print("🗑️  Conversation history cleared")
+    
+    def get_history(self) -> List[Dict]:
+        """Get conversation history"""
+        return self.conversation_history.copy()
+    
+    def set_model(self, model_name: str):
+        """Change the model being used"""
+        old_model = self.model_name
+        self.model_name = model_name
+        print(f"🔄 Model changed from {old_model} to {model_name}")
+        self._test_connection()
 
-🔍 **Processed Content:**
-• Document chunks: {doc_chunks}
-• Unique sources: {sources}
-
-💡 **Ready to answer questions!**"""
-            
-            return status
-            
-        except Exception as e:
-            return f"❌ Error getting status: {str(e)}"
-    
-    def clear_chat():
-        """Clear chat history"""
-        return []
-    
-    # Create Gradio interface
-    with gr.Blocks(
-        title="Offline AI Agent",
-        theme=gr.themes.Soft(),
-        css="""
-        .gradio-container {
-            max-width: 1200px !important;
-        }
-        .chat-container {
-            height: 500px !important;
-        }
-        """
-    ) as demo:
-        
-        gr.Markdown("# 🤖 Offline AI Agent")
-        gr.Markdown("Ask questions about your documents, images, and audio files - completely offline!")
-        
-        with gr.Row():
-            with gr.Column(scale=2):
-                # Chat interface
-                chatbot = gr.Chatbot(
-                    label="💬 Chat with your documents",
-                    height=500,
-                    show_label=True,
-                    container=True,
-                    elem_classes=["chat-container"]
-                )
-                
-                # Image display area
-                image_gallery = gr.Gallery(
-                    label="🖼️ Relevant Images",
-                    show_label=True,
-                    elem_id="image-gallery",
-                    columns=3,
-                    rows=1,
-                    height="auto",
-                    visible=False
-                )
-                
-                with gr.Row():
-                    msg = gr.Textbox(
-                        label="Your Question",
-                        placeholder="Ask me anything about your uploaded documents...",
-                        scale=4,
-                        lines=1
-                    )
-                    send_btn = gr.Button("Send 📤", scale=1, variant="primary")
-                    clear_btn = gr.Button("Clear 🗑️", scale=1)
-                
-                with gr.Row():
-                    show_images_checkbox = gr.Checkbox(
-                        label="Show relevant images in responses",
-                        value=False
-                    )
-            
-            with gr.Column(scale=1):
-                # Control panel
-                gr.Markdown("## 🛠️ Control Panel")
-                
-                # File upload
-                file_upload = gr.File(
-                    label="📁 Upload Files",
-                    file_types=[".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".wav", ".mp3", ".m4a", ".flac"],
-                    file_count="multiple",
-                    type="filepath"
-                )
-                upload_btn = gr.Button("Upload Files 📤", variant="secondary")
-                upload_status = gr.Textbox(label="Upload Status", lines=3, interactive=False)
-                
-                # Process documents
-                process_btn = gr.Button("Process Documents 🔄", variant="primary")
-                process_status = gr.Textbox(label="Processing Status", lines=2, interactive=False)
-                
-                # Clear uploaded files
-                clear_files_btn = gr.Button("Clear Uploaded Files 🗑️", variant="secondary")
-                
-                # System status
-                status_btn = gr.Button("System Status 📊", variant="secondary")
-                system_status = gr.Textbox(label="System Status", lines=8, interactive=False)
-        
-        # Event handlers
-        def submit_message(message, history, show_images):
-            new_history, empty_msg, images = chat_interface(message, history, show_images)
-            # Show/hide image gallery based on whether images are found
-            gallery_visible = len(images) > 0 if images else False
-            return new_history, empty_msg, images, gr.update(visible=gallery_visible)
-        
-        def clear_chat():
-            return [], gr.update(visible=False)
-        
-        def clear_uploaded_files():
-            nonlocal uploaded_files
-            uploaded_files = []
-            return "🗑️ Cleared all uploaded files. Upload new files to process."
-        
-        # Chat events
-        msg.submit(
-            submit_message, 
-            inputs=[msg, chatbot, show_images_checkbox], 
-            outputs=[chatbot, msg, image_gallery, image_gallery]
-        )
-        send_btn.click(
-            submit_message, 
-            inputs=[msg, chatbot, show_images_checkbox], 
-            outputs=[chatbot, msg, image_gallery, image_gallery]
-        )
-        clear_btn.click(clear_chat, outputs=[chatbot, image_gallery])
-        
-        # File upload events
-        upload_btn.click(upload_files, inputs=[file_upload], outputs=[upload_status])
-        
-        # Processing events
-        process_btn.click(process_documents, outputs=[process_status])
-        
-        # Clear files events
-        clear_files_btn.click(clear_uploaded_files, outputs=[upload_status])
-        
-        # Status events
-        status_btn.click(get_system_status, outputs=[system_status])
-        
-        # Welcome message
-        gr.Markdown("""
-        ## 🚀 Getting Started
-        
-        1. **Upload your files** using the file uploader above (PDFs, images, audio)
-        2. **Click "Process Documents"** to analyze your content
-        3. **Ask questions** about your uploaded content
-        4. **Check "System Status"** to see what's been processed
-        5. **Enable "Show relevant images"** to see document images in responses
-        
-        ### 💡 How It Works
-        - **Upload files first** using the file uploader
-        - **Then click "Process Documents"** to analyze them
-        - Files are processed **immediately** - no restart needed
-        - Upload multiple files at once for batch processing
-        - Use "Clear Uploaded Files" to reset and upload new files
-        
-        ### ⚠️ Important Notes
-        - **Always upload files first** before clicking "Process Documents"
-        - The system processes **uploaded files**, not files in data/ folders
-        - If no files are uploaded, you'll get a "no files found" message
-        
-        ### 📝 Supported Formats
-        - **Documents:** PDF
-        - **Images:** PNG, JPG, JPEG, BMP, TIFF (with OCR)
-        - **Audio:** WAV, MP3, M4A, FLAC (with speech-to-text)
-        
-        ### 🖼️ Image Features
-        - **PDF Images:** Automatically extracted and displayed when relevant
-        - **Strong Citations:** Detailed source references with page numbers
-        - **Visual Context:** See the actual images from your documents
-        """)
-    
-    return demo
-
-def launch_terminal_interface(agent: Any):
-    """Launch terminal chat interface"""
-    print("\n" + "="*60)
-    print("🤖 Offline AI Agent - Terminal Interface")
-    print("="*60)
-    print("Commands:")
-    print("  'help' - Show this help")
-    print("  'status' - Show system status") 
-    print("  'process' - Process documents")
-    print("  'clear' - Clear conversation history")
-    print("  'quit' or 'exit' - Exit the program")
-    print("="*60)
-    
-    while True:
-        try:
-            question = input("\n❓ Your question: ").strip()
-            
-            if not question:
-                continue
-                
-            if question.lower() in ['quit', 'exit', 'q']:
-                print("👋 Goodbye!")
-                break
-                
-            elif question.lower() == 'help':
-                print("""
-📋 Available Commands:
-• help - Show this help message
-• status - Show system status and file counts
-• process - Process all documents in data folders
-• clear - Clear conversation history
-• quit/exit - Exit the program
-
-💡 Just type any question to chat with your documents!
-                """)
-                
-            elif question.lower() == 'status':
-                try:
-                    # Get file counts
-                    pdf_count = len(list((agent.data_dir / "pdfs").glob("*.pdf"))) if (agent.data_dir / "pdfs").exists() else 0
-                    img_count = len(list((agent.data_dir / "images").glob("*"))) if (agent.data_dir / "images").exists() else 0
-                    audio_count = len(list((agent.data_dir / "audio").glob("*"))) if (agent.data_dir / "audio").exists() else 0
-                    
-                    print(f"""
-📊 System Status:
-📁 Files: {pdf_count} PDFs, {img_count} images, {audio_count} audio files
-🔍 Vector store: {agent.vector_store.get_stats()['total_documents'] if hasattr(agent, 'vector_store') else 0} chunks
-                    """)
-                except Exception as e:
-                    print(f"❌ Error getting status: {e}")
-                    
-            elif question.lower() == 'process':
-                try:
-                    print("🔄 Processing documents...")
-                    agent.process_documents()
-                    print("✅ Processing complete!")
-                except Exception as e:
-                    print(f"❌ Error processing: {e}")
-                    
-            elif question.lower() == 'clear':
-                if hasattr(agent, 'qa_chain') and agent.qa_chain:
-                    agent.qa_chain.clear_history()
-                print("🗑️ Conversation history cleared")
-                
-            else:
-                # Regular question
-                try:
-                    response, sources = agent.ask_question(question)
-                    print(f"\n🤖 Answer: {response}")
-                    
-                    if sources:
-                        unique_sources = list(dict.fromkeys(sources))
-                        source_names = [os.path.basename(src) for src in unique_sources]
-                        print(f"📚 Sources: {', '.join(source_names)}")
-                        
-                except Exception as e:
-                    print(f"❌ Error: {e}")
-                    
-        except KeyboardInterrupt:
-            print("\n👋 Goodbye!")
-            break
-        except Exception as e:
-            print(f"❌ Unexpected error: {e}")
-
-# Test the UI components
+# Test the optimized QA chain
 if __name__ == "__main__":
-    print("🧪 Testing UI components...")
-    print("✅ Gradio interface functions defined")
-    print("✅ Terminal interface functions defined")
-    print("💡 Import this module and call launch_gradio_interface(agent) or launch_terminal_interface(agent)")
+    print("🧪 Testing Optimized QA Chain...")
+    print("💡 This version is optimized for speed with:")
+    print("   • Reduced context size")
+    print("   • Faster model parameters") 
+    print("   • Shorter responses")
+    print("   • Increased timeout handling")

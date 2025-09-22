@@ -12,12 +12,20 @@ class QAChain:
         self.model_name = model_name
         self.ollama_url = ollama_url
         self.conversation_history = []
+        self.offline_mode = True
         
         print(f"🤖 QA Chain initialized with model: {model_name}")
         print(f"🔗 Ollama URL: {ollama_url}")
         
         # Test connection
         self._test_connection()
+    
+    def _load_image_embedding_model(self):
+        """Load model for image relevance scoring"""
+        if self.image_embedding_model is None:
+            print("📥 Loading image relevance model...")
+            self.image_embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            print("✅ Image relevance model loaded")
     
     def _test_connection(self):
         """Test connection to Ollama"""
@@ -153,10 +161,12 @@ class QAChain:
         citation_text = "\n\n**Sources:**\n" + "\n".join(citations)
         return response + citation_text
     
-    def get_relevant_images(self, metadata: List[Dict]) -> List[Dict]:
-        """Extract relevant images from metadata"""
+    def get_relevant_images(self, query: str, metadata: List[Dict], max_images: int = 5) -> List[Dict]:
+        """Extract and rank relevant images from metadata based on query"""
         relevant_images = []
+        all_images = []
         
+        # Collect all images from all chunks
         for meta in metadata:
             if meta.get('has_images', False):
                 images = meta.get('images', [])
@@ -166,9 +176,73 @@ class QAChain:
                         'filename': img['filename'],
                         'source': os.path.basename(meta['source']),
                         'page': meta.get('page', 1),
-                        'size': img.get('size', (0, 0))
+                        'size': img.get('size', (0, 0)),
+                        'context_text': img.get('context_text', ''),
+                        'chunk_relevance_score': 1.0 / (meta.get('distance', 1) + 0.1)  # Higher score for more relevant chunks
                     }
-                    relevant_images.append(img_info)
+                    all_images.append(img_info)
+            
+            # Also check for all document images in case we need broader context
+            all_doc_images = meta.get('all_document_images', [])
+            for img in all_doc_images:
+                if not any(existing['path'] == img['path'] for existing in all_images):
+                    img_info = {
+                        'path': img['path'],
+                        'filename': img['filename'],
+                        'source': os.path.basename(meta['source']),
+                        'page': img.get('page', 1),
+                        'size': img.get('size', (0, 0)),
+                        'context_text': img.get('context_text', ''),
+                        'chunk_relevance_score': 0.5  # Lower score for non-chunk images
+                    }
+                    all_images.append(img_info)
+        
+        if not all_images:
+            return []
+        
+        # Rank images by relevance to query
+        try:
+            self._load_image_embedding_model()
+            
+            # Create embeddings for query and image contexts
+            query_embedding = self.image_embedding_model.encode([query])
+            
+            image_contexts = []
+            for img in all_images:
+                # Combine filename and context for relevance scoring
+                context = f"{img['filename']} {img['context_text']}"
+                image_contexts.append(context)
+            
+            if image_contexts:
+                context_embeddings = self.image_embedding_model.encode(image_contexts)
+                
+                # Calculate similarity scores
+                similarities = np.dot(query_embedding, context_embeddings.T)[0]
+                
+                # Combine with chunk relevance scores
+                for i, img in enumerate(all_images):
+                    img['text_similarity'] = float(similarities[i])
+                    img['combined_score'] = (
+                        img['text_similarity'] * 0.7 + 
+                        img['chunk_relevance_score'] * 0.3
+                    )
+                
+                # Sort by combined score
+                all_images.sort(key=lambda x: x['combined_score'], reverse=True)
+                
+                print(f"🖼️ Ranked {len(all_images)} images by relevance to query")
+                
+                # Return top images
+                relevant_images = all_images[:max_images]
+                
+                # Log top matches
+                for i, img in enumerate(relevant_images[:3]):
+                    print(f"  {i+1}. {img['filename']} (score: {img['combined_score']:.3f})")
+            
+        except Exception as e:
+            print(f"⚠️ Could not rank images by relevance: {e}")
+            # Fallback: return images from most relevant chunks
+            relevant_images = sorted(all_images, key=lambda x: x['chunk_relevance_score'], reverse=True)[:max_images]
         
         return relevant_images
     
@@ -199,7 +273,7 @@ class QAChain:
         unique_sources = list(dict.fromkeys(sources))  # Remove duplicates while preserving order
         
         # Get relevant images
-        relevant_images = self.get_relevant_images(metadata)
+        relevant_images = self.get_relevant_images(question, metadata, max_images=5)
         
         # Add to conversation history
         self.conversation_history.append({
