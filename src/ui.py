@@ -1,258 +1,349 @@
-# src/qa_chain.py - Optimized for Speed
-import requests
-import json
-from typing import List, Tuple, Dict, Optional
-import time
+# src/ui.py - Enhanced Gradio Interface
+import gradio as gr
 import os
+import tempfile
+import shutil
+from typing import List, Dict, Tuple, Optional
 import base64
+from PIL import Image
+import io
 
-class QAChain:
-    def __init__(self, vector_store, model_name="mistral", ollama_url="http://localhost:11434"):
-        self.vector_store = vector_store
-        self.model_name = model_name
-        self.ollama_url = ollama_url
-        self.conversation_history = []
-        
-        print(f"🤖 QA Chain initialized with model: {model_name}")
-        print(f"🔗 Ollama URL: {ollama_url}")
-        
-        # Test connection
-        self._test_connection()
+def create_file_upload_interface(agent):
+    """Create file upload and processing interface"""
     
-    def _test_connection(self):
-        """Test connection to Ollama"""
-        try:
-            response = requests.get(f"{self.ollama_url}/api/tags", timeout=5)
-            if response.status_code == 200:
-                models = response.json().get('models', [])
-                available_models = [m['name'] for m in models]
+    def process_uploaded_files(files, progress=gr.Progress()):
+        """Process uploaded files and add to vector store"""
+        if not files:
+            return "❌ No files uploaded", "", ""
+        
+        progress(0, desc="Starting file processing...")
+        
+        results = []
+        total_chunks = 0
+        
+        for i, file in enumerate(files):
+            file_path = file.name
+            file_name = os.path.basename(file_path)
+            file_ext = os.path.splitext(file_name)[1].lower()
+            
+            progress((i + 1) / len(files), desc=f"Processing {file_name}...")
+            
+            try:
+                # Determine file type and process accordingly
+                chunks_added = 0
                 
-                if self.model_name in available_models or any(self.model_name in m for m in available_models):
-                    print(f"✅ Ollama connected, model '{self.model_name}' available")
+                if file_ext == '.pdf':
+                    chunks_added = agent.process_single_file(file_path, 'pdf')
+                elif file_ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', '.webp']:
+                    chunks_added = agent.process_single_file(file_path, 'image')
+                elif file_ext in ['.wav', '.mp3', '.m4a', '.flac', '.aac', '.ogg']:
+                    chunks_added = agent.process_single_file(file_path, 'audio')
                 else:
-                    print(f"⚠️  Model '{self.model_name}' not found. Available: {available_models}")
-                    print(f"💡 Run: ollama pull {self.model_name}")
-            else:
-                print(f"❌ Ollama connection error: {response.status_code}")
-        except Exception as e:
-            print(f"❌ Cannot connect to Ollama: {e}")
-            print("💡 Make sure Ollama is running: ollama serve")
+                    results.append(f"❌ {file_name}: Unsupported format")
+                    continue
+                
+                if chunks_added > 0:
+                    results.append(f"✅ {file_name}: {chunks_added} chunks created")
+                    total_chunks += chunks_added
+                else:
+                    results.append(f"⚠️ {file_name}: No content extracted")
+                    
+            except Exception as e:
+                results.append(f"❌ {file_name}: Error - {str(e)}")
+        
+        # Update stats
+        stats = agent.get_stats()
+        stats_text = f"""📊 **Current System Stats:**
+- 📄 PDFs: {stats['pdf_count']}
+- 🖼️ Images: {stats['img_count']} 
+- 🎵 Audio: {stats['audio_count']}
+- 📚 Document chunks: {stats['doc_chunks']}
+- 🤖 Model: {stats['model']}"""
+        
+        processing_results = "\n".join(results)
+        if total_chunks > 0:
+            processing_results += f"\n\n🎉 **Total: {total_chunks} new chunks added to knowledge base**"
+        
+        return processing_results, stats_text, ""
     
-    def generate_response(self, prompt: str, temperature: float = 0.3, max_tokens: int = 800) -> str:
-        """Generate response using local Ollama model with optimized settings"""
-        try:
-            # Optimized payload for faster responses
-            payload = {
-                "model": self.model_name,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": temperature,
-                    "num_predict": max_tokens,
-                    "top_k": 20,
-                    "top_p": 0.8,
-                    "repeat_penalty": 1.1,
-                    "num_ctx": 2048  # Reduce context window for speed
-                }
-            }
-            
-            print(f"🤔 Generating response with {self.model_name}...")
-            start_time = time.time()
-            
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=payload,
-                timeout=180  # Increased timeout to 3 minutes
-            )
-            
-            end_time = time.time()
-            
-            if response.status_code == 200:
-                result = response.json()
-                generated_text = result.get('response', '').strip()
-                
-                # Get generation stats
-                total_duration = result.get('total_duration', 0) / 1e9  # Convert to seconds
-                eval_count = result.get('eval_count', 0)
-                
-                print(f"✅ Response generated in {end_time - start_time:.1f}s")
-                if eval_count > 0 and total_duration > 0:
-                    print(f"📊 Tokens: {eval_count}, Speed: {eval_count/total_duration:.1f} tokens/s")
-                
-                return generated_text
-            else:
-                error_msg = f"Ollama API error: {response.status_code}"
-                print(f"❌ {error_msg}")
-                return error_msg
+    def ask_question(question, history, quick_mode=False):
+        """Process question and return response"""
+        if not question.strip():
+            return history, ""
         
-        except requests.exceptions.Timeout:
-            return "⏰ Request timed out. Try asking a simpler question or switch to a faster model like 'phi3:mini'."
-        except Exception as e:
-            error_msg = f"Error connecting to Ollama: {str(e)}"
-            print(f"❌ {error_msg}")
-            return error_msg
+        # Get response from agent
+        response, sources, metadata, images = agent.ask_question(question, quick_mode)
+        
+        # Format response with sources
+        formatted_response = response
+        if sources:
+            formatted_response += f"\n\n**📚 Sources:**\n"
+            for i, source in enumerate(sources, 1):
+                formatted_response += f"{i}. {os.path.basename(source)}\n"
+        
+        # Add to chat history
+        history.append([question, formatted_response])
+        
+        return history, ""
     
-    def create_prompt(self, question: str, contexts: List[str], include_history: bool = False) -> str:
-        """Create an optimized prompt for faster processing"""
-        
-        # Limit context to most relevant chunks and shorter length
-        limited_contexts = contexts[:3]  # Only use top 3 most relevant
-        context_text = ""
-        if limited_contexts:
-            # Truncate long contexts
-            truncated_contexts = []
-            for i, ctx in enumerate(limited_contexts):
-                if len(ctx) > 500:  # Limit context length
-                    ctx = ctx[:500] + "..."
-                truncated_contexts.append(f"Context {i+1}: {ctx}")
-            context_text = "\n\n".join(truncated_contexts)
-        
-        # Shorter, more direct prompt
-        prompt_parts = []
-        prompt_parts.append("Answer the question based on the provided context. Be concise and direct. Always cite your sources with specific page numbers when available.")
-        
-        if context_text:
-            prompt_parts.append(f"Context:\n{context_text}")
+    def clear_chat():
+        """Clear chat history"""
+        agent.qa_chain.clear_history() if agent.qa_chain else None
+        return [], ""
+    
+    def switch_model(model_name):
+        """Switch AI model"""
+        success = agent.switch_model(model_name)
+        if success:
+            return f"✅ Successfully switched to {model_name}"
         else:
-            prompt_parts.append("No relevant context found.")
-        
-        prompt_parts.append(f"Question: {question}")
-        prompt_parts.append("Answer (include citations with page numbers):")
-        
-        return "\n".join(prompt_parts)
+            return f"❌ Failed to switch to {model_name}. Make sure it's installed with: ollama pull {model_name}"
     
-    def format_citations(self, response: str, metadata: List[Dict]) -> str:
-        """Format response with stronger citations"""
-        if not metadata:
-            return response
+    # Create Gradio interface
+    with gr.Blocks(
+        title="🤖 Offline AI Agent",
+        theme=gr.themes.Soft(),
+        css="""
+        .gradio-container {
+            max-width: 1200px !important;
+        }
+        .chat-container {
+            height: 500px !important;
+        }
+        """
+    ) as demo:
         
-        # Create detailed citation information
-        citations = []
-        for i, meta in enumerate(metadata, 1):
-            source_name = os.path.basename(meta['source'])
-            page = meta.get('page', 1)
-            doc_type = meta.get('type', 'document')
+        gr.Markdown("""
+        # 🤖 Offline AI Agent
+        
+        **Upload documents, images, or audio files and ask questions about their content!**
+        
+        ⚡ **Optimized for speed** - Uses local AI models for complete privacy
+        """)
+        
+        with gr.Row():
+            with gr.Column(scale=2):
+                # File upload section
+                gr.Markdown("## 📁 Upload Files")
+                
+                file_upload = gr.File(
+                    label="Upload Documents, Images, or Audio Files",
+                    file_count="multiple",
+                    file_types=[".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".gif", ".webp", 
+                               ".wav", ".mp3", ".m4a", ".flac", ".aac", ".ogg"]
+                )
+                
+                process_btn = gr.Button("🔄 Process Files", variant="primary", size="lg")
+                
+                processing_output = gr.Textbox(
+                    label="Processing Results",
+                    lines=8,
+                    max_lines=15,
+                    interactive=False
+                )
             
-            if doc_type == 'pdf':
-                citation = f"[{i}] {source_name}, Page {page}"
-            elif doc_type == 'image':
-                confidence = meta.get('confidence', 0)
-                citation = f"[{i}] {source_name} (OCR, {confidence:.1f}% confidence)"
-            elif doc_type == 'audio':
-                duration = meta.get('duration')
-                if duration:
-                    citation = f"[{i}] {source_name} (Audio, {duration:.1f}s)"
-                else:
-                    citation = f"[{i}] {source_name} (Audio)"
-            else:
-                citation = f"[{i}] {source_name}"
+            with gr.Column(scale=1):
+                # Stats and controls
+                gr.Markdown("## 📊 System Status")
+                
+                stats_display = gr.Textbox(
+                    label="Current Stats",
+                    lines=8,
+                    interactive=False,
+                    value=f"""📊 **System Stats:**
+- 📄 PDFs: 0
+- 🖼️ Images: 0
+- 🎵 Audio: 0
+- 📚 Document chunks: 0
+- 🤖 Model: {agent.model_name}"""
+                )
+                
+                # Model switching
+                gr.Markdown("### 🔄 Switch Model")
+                model_dropdown = gr.Dropdown(
+                    choices=["phi3:mini", "mistral", "llama3", "codellama"],
+                    value=agent.model_name,
+                    label="AI Model"
+                )
+                switch_btn = gr.Button("Switch Model", size="sm")
+                model_status = gr.Textbox(label="Model Status", lines=2, interactive=False)
+        
+        # Chat interface
+        gr.Markdown("## 💬 Chat with Your Documents")
+        
+        with gr.Row():
+            with gr.Column(scale=4):
+                chatbot = gr.Chatbot(
+                    label="AI Assistant",
+                    height=400,
+                    show_label=True,
+                    container=True,
+                    bubble_full_width=False
+                )
+                
+                with gr.Row():
+                    question_input = gr.Textbox(
+                        label="Ask a question",
+                        placeholder="What would you like to know about your documents?",
+                        lines=2,
+                        scale=4
+                    )
+                    
+                with gr.Row():
+                    ask_btn = gr.Button("💬 Ask", variant="primary", scale=2)
+                    quick_btn = gr.Button("⚡ Quick Ask", variant="secondary", scale=1)
+                    clear_btn = gr.Button("🗑️ Clear", variant="stop", scale=1)
             
-            citations.append(citation)
+            with gr.Column(scale=1):
+                gr.Markdown("### 💡 Tips")
+                gr.Markdown("""
+                **Quick Start:**
+                1. Upload your files above
+                2. Click "Process Files"
+                3. Ask questions below!
+                
+                **Supported Files:**
+                - 📄 PDFs
+                - 🖼️ Images (with OCR)
+                - 🎵 Audio (with transcription)
+                
+                **Models:**
+                - **phi3:mini**: Fastest responses
+                - **mistral**: Balanced quality/speed
+                - **llama3**: Highest quality
+                
+                **Quick Ask**: Ultra-fast responses with minimal context
+                """)
         
-        # Add citations to response
-        citation_text = "\n\n**Sources:**\n" + "\n".join(citations)
-        return response + citation_text
+        # Event handlers
+        process_btn.click(
+            fn=process_uploaded_files,
+            inputs=[file_upload],
+            outputs=[processing_output, stats_display, question_input],
+            show_progress=True
+        )
+        
+        ask_btn.click(
+            fn=lambda q, h: ask_question(q, h, quick_mode=False),
+            inputs=[question_input, chatbot],
+            outputs=[chatbot, question_input]
+        )
+        
+        quick_btn.click(
+            fn=lambda q, h: ask_question(q, h, quick_mode=True),
+            inputs=[question_input, chatbot],
+            outputs=[chatbot, question_input]
+        )
+        
+        question_input.submit(
+            fn=lambda q, h: ask_question(q, h, quick_mode=False),
+            inputs=[question_input, chatbot],
+            outputs=[chatbot, question_input]
+        )
+        
+        clear_btn.click(
+            fn=clear_chat,
+            outputs=[chatbot, question_input]
+        )
+        
+        switch_btn.click(
+            fn=switch_model,
+            inputs=[model_dropdown],
+            outputs=[model_status]
+        )
+        
+        # Load initial stats
+        def load_initial_stats():
+            stats = agent.get_stats()
+            return f"""📊 **System Stats:**
+- 📄 PDFs: {stats['pdf_count']}
+- 🖼️ Images: {stats['img_count']}
+- 🎵 Audio: {stats['audio_count']}
+- 📚 Document chunks: {stats['doc_chunks']}
+- 🤖 Model: {stats['model']}"""
+        
+        demo.load(fn=load_initial_stats, outputs=[stats_display])
     
-    def get_relevant_images(self, metadata: List[Dict]) -> List[Dict]:
-        """Extract relevant images from metadata"""
-        relevant_images = []
-        
-        for meta in metadata:
-            if meta.get('has_images', False):
-                images = meta.get('images', [])
-                for img in images:
-                    img_info = {
-                        'path': img['path'],
-                        'filename': img['filename'],
-                        'source': os.path.basename(meta['source']),
-                        'page': meta.get('page', 1),
-                        'size': img.get('size', (0, 0))
-                    }
-                    relevant_images.append(img_info)
-        
-        return relevant_images
-    
-    def ask(self, question: str, k: int = 3, include_history: bool = False, temperature: float = 0.3) -> Tuple[str, List[str], List[Dict], List[Dict]]:
-        """Ask a question with optimized settings for speed"""
-        print(f"\n❓ Question: {question}")
-        
-        # Check if vector store has documents
-        if not hasattr(self.vector_store, 'index') or self.vector_store.index is None or self.vector_store.index.ntotal == 0:
-            return "❌ No documents available. Please upload and process some documents first.", [], [], []
-        
-        # Retrieve fewer contexts for faster processing
-        contexts, metadata = self.vector_store.search(question, k)
-        
-        if not contexts:
-            response = "I don't have any relevant documents to answer this question. Please add some documents to the knowledge base first."
-            return response, [], [], []
-        
-        # Generate response with optimized prompt
-        prompt = self.create_prompt(question, contexts, include_history)
-        response = self.generate_response(prompt, temperature, max_tokens=500)  # Shorter responses
-        
-        # Format response with stronger citations
-        response = self.format_citations(response, metadata)
-        
-        # Extract sources
-        sources = [meta['source'] for meta in metadata]
-        unique_sources = list(dict.fromkeys(sources))  # Remove duplicates while preserving order
-        
-        # Get relevant images
-        relevant_images = self.get_relevant_images(metadata)
-        
-        # Add to conversation history
-        self.conversation_history.append({
-            'question': question,
-            'answer': response,
-            'sources': unique_sources,
-            'context_count': len(contexts),
-            'images': relevant_images
-        })
-        
-        # Keep only last 5 conversations in history (reduced from 10)
-        if len(self.conversation_history) > 5:
-            self.conversation_history = self.conversation_history[-5:]
-        
-        print(f"✅ Answer generated using {len(contexts)} context chunks from {len(unique_sources)} sources")
-        if relevant_images:
-            print(f"🖼️ Found {len(relevant_images)} relevant images")
-        
-        return response, unique_sources, metadata, relevant_images
-    
-    def quick_ask(self, question: str) -> str:
-        """Ultra-fast question answering with minimal context"""
-        contexts, metadata = self.vector_store.search(question, k=1)  # Only 1 context
-        
-        if not contexts:
-            return "No relevant information found."
-        
-        # Ultra-simple prompt
-        prompt = f"Context: {contexts[0][:300]}...\nQuestion: {question}\nBrief answer:"
-        
-        return self.generate_response(prompt, temperature=0.1, max_tokens=200)
-    
-    def clear_history(self):
-        """Clear conversation history"""
-        self.conversation_history = []
-        print("🗑️  Conversation history cleared")
-    
-    def get_history(self) -> List[Dict]:
-        """Get conversation history"""
-        return self.conversation_history.copy()
-    
-    def set_model(self, model_name: str):
-        """Change the model being used"""
-        old_model = self.model_name
-        self.model_name = model_name
-        print(f"🔄 Model changed from {old_model} to {model_name}")
-        self._test_connection()
+    return demo
 
-# Test the optimized QA chain
+def launch_gradio_interface(agent):
+    """Launch the Gradio web interface"""
+    return create_file_upload_interface(agent)
+
+def launch_terminal_interface(agent):
+    """Launch terminal-based chat interface"""
+    print("\n🚀 Terminal Chat Interface")
+    print("=" * 50)
+    print("💡 Commands:")
+    print("   'quit' or 'exit' - Exit the chat")
+    print("   'clear' - Clear conversation history")
+    print("   'stats' - Show system statistics")
+    print("   'switch phi3' - Switch to phi3:mini model")
+    print("   'switch mistral' - Switch to mistral model")
+    print("=" * 50)
+    
+    while True:
+        try:
+            question = input("\n❓ Your question: ").strip()
+            
+            if not question:
+                continue
+            
+            if question.lower() in ['quit', 'exit', 'q']:
+                print("👋 Goodbye!")
+                break
+            
+            elif question.lower() == 'clear':
+                agent.qa_chain.clear_history() if agent.qa_chain else None
+                print("🗑️ Chat history cleared")
+                continue
+            
+            elif question.lower() == 'stats':
+                stats = agent.get_stats()
+                print(f"\n📊 System Statistics:")
+                print(f"🤖 Model: {stats['model']}")
+                print(f"📄 PDFs: {stats['pdf_count']}")
+                print(f"🖼️ Images: {stats['img_count']}")
+                print(f"🎵 Audio files: {stats['audio_count']}")
+                print(f"📚 Document chunks: {stats['doc_chunks']}")
+                print(f"📁 Unique sources: {stats['sources']}")
+                continue
+            
+            elif question.lower().startswith('switch '):
+                model_name = question.lower().replace('switch ', '').strip()
+                if model_name in ['phi3', 'phi3:mini']:
+                    model_name = 'phi3:mini'
+                success = agent.switch_model(model_name)
+                if success:
+                    print(f"✅ Switched to {model_name}")
+                else:
+                    print(f"❌ Failed to switch to {model_name}")
+                continue
+            
+            # Process question
+            print("🤔 Thinking...")
+            response, sources, metadata, images = agent.ask_question(question)
+            
+            print(f"\n🤖 **Answer:**")
+            print(response)
+            
+            if sources:
+                print(f"\n📚 **Sources:**")
+                for i, source in enumerate(sources, 1):
+                    print(f"  {i}. {os.path.basename(source)}")
+            
+            if images:
+                print(f"\n🖼️ **Relevant Images:** {len(images)} found")
+        
+        except KeyboardInterrupt:
+            print("\n\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            print("Please try again or type 'quit' to exit.")
+
+# Test the UI components
 if __name__ == "__main__":
-    print("🧪 Testing Optimized QA Chain...")
-    print("💡 This version is optimized for speed with:")
-    print("   • Reduced context size")
-    print("   • Faster model parameters") 
-    print("   • Shorter responses")
-    print("   • Increased timeout handling")
+    print("🧪 Testing UI Components...")
+    print("💡 This module provides both Gradio web interface and terminal chat interface")
+    print("   Use main.py to launch the full application")

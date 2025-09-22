@@ -46,9 +46,20 @@ class AudioProcessor:
             y, sr = librosa.load(file_path, sr=None)
             duration = len(y) / sr
             
-            # Get additional audio properties
-            tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
-            spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
+            # Get additional audio properties with error handling
+            try:
+                tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
+                tempo = float(tempo) if tempo is not None else 120.0
+            except Exception as e:
+                print(f"⚠️ Could not detect tempo: {e}")
+                tempo = 120.0
+            
+            try:
+                spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
+                avg_spectral_centroid = float(np.mean(spectral_centroids))
+            except Exception as e:
+                print(f"⚠️ Could not analyze spectral features: {e}")
+                avg_spectral_centroid = 0.0
             
             info = {
                 'filename': os.path.basename(file_path),
@@ -56,8 +67,8 @@ class AudioProcessor:
                 'sample_rate': sr,
                 'channels': 1 if len(y.shape) == 1 else y.shape[0],
                 'file_size': os.path.getsize(file_path),
-                'tempo': float(tempo),
-                'avg_spectral_centroid': float(np.mean(spectral_centroids)),
+                'tempo': tempo,
+                'avg_spectral_centroid': avg_spectral_centroid,
                 'format': os.path.splitext(file_path)[1].lower()
             }
             
@@ -69,11 +80,22 @@ class AudioProcessor:
             return info
             
         except Exception as e:
-            print(f"⚠️ Could not analyze audio file {file_path}: {e}")
+            print(f"⚠️ Could not fully analyze audio file {file_path}: {e}")
+            print("   Falling back to basic file info...")
+            
+            # Try to get basic duration with librosa
+            try:
+                y, sr = librosa.load(file_path, sr=None)
+                duration = len(y) / sr
+                print(f"   Basic duration detected: {self._format_duration(duration)}")
+            except Exception as e2:
+                print(f"   Could not get duration: {e2}")
+                duration = 0.0
+            
             # Fallback to basic info
             return {
                 'filename': os.path.basename(file_path),
-                'duration': 0,
+                'duration': duration,
                 'sample_rate': 0,
                 'channels': 0,
                 'file_size': os.path.getsize(file_path) if os.path.exists(file_path) else 0,
@@ -138,7 +160,7 @@ class AudioProcessor:
             # Prepare transcription options
             transcribe_options = {
                 'verbose': False,
-                'word_timestamps': True,  # Enable word-level timestamps
+                'without_timestamps': True,  # Enable word-level timestamps
                 'temperature': 0.0,  # More deterministic results
             }
             
@@ -411,10 +433,14 @@ class AudioProcessor:
         # Get audio info first
         audio_info = self.get_audio_info(audio_path)
         
-        # Skip very short audio files
-        if audio_info['duration'] < 1.0:
+        # Skip very short audio files (but be more lenient)
+        if audio_info['duration'] < 0.5:
             print(f"⚠️ Audio file too short ({audio_info['duration']:.1f}s), skipping")
             return []
+        
+        # If duration is 0 but file exists and has size, try to process anyway
+        if audio_info['duration'] == 0.0 and audio_info['file_size'] > 0:
+            print("⚠️ Duration detection failed, but file has content. Attempting transcription anyway...")
         
         # Warn about very long audio files
         if audio_info['duration'] > 3600:  # 1 hour
@@ -426,6 +452,8 @@ class AudioProcessor:
         
         if transcript_data['text']:
             return self.chunk_transcript_advanced(transcript_data, audio_path)
+        else:
+            print(f"❌ No transcription text generated for {os.path.basename(audio_path)}")
         return []
     
     def process_all_audio(self, audio_directory: str, language: Optional[str] = None) -> List[Dict]:

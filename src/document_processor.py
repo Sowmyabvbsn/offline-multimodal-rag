@@ -1,259 +1,375 @@
-# src/qa_chain.py - Optimized for Speed
-import requests
-import json
-from typing import List, Tuple, Dict, Optional
-import time
+# src/document_processor.py
+import fitz  # PyMuPDF
+from typing import List, Dict, Optional
 import os
-import base64
 import hashlib
+import base64
+from io import BytesIO
+from PIL import Image
 
-class QAChain:
-    def __init__(self, vector_store, model_name="mistral", ollama_url="http://localhost:11434"):
-        self.vector_store = vector_store
-        self.model_name = model_name
-        self.ollama_url = ollama_url
-        self.conversation_history = []
+class DocumentProcessor:
+    def __init__(self):
+        self.supported_formats = ['.pdf']
+        print("📄 Document processor initialized")
+        print(f"   Supported formats: {', '.join(self.supported_formats)}")
         
-        print(f"🤖 QA Chain initialized with model: {model_name}")
-        print(f"🔗 Ollama URL: {ollama_url}")
-        
-        # Test connection
-        self._test_connection()
+        # Test if PyMuPDF is available
+        self._test_pymupdf()
     
-    def _test_connection(self):
-        """Test connection to Ollama"""
+    def _test_pymupdf(self):
+        """Test if PyMuPDF is available"""
         try:
-            response = requests.get(f"{self.ollama_url}/api/tags", timeout=5)
-            if response.status_code == 200:
-                models = response.json().get('models', [])
-                available_models = [m['name'] for m in models]
-                
-                if self.model_name in available_models or any(self.model_name in m for m in available_models):
-                    print(f"✅ Ollama connected, model '{self.model_name}' available")
-                else:
-                    print(f"⚠️  Model '{self.model_name}' not found. Available: {available_models}")
-                    print(f"💡 Run: ollama pull {self.model_name}")
-            else:
-                print(f"❌ Ollama connection error: {response.status_code}")
+            doc = fitz.open()  # Create empty document
+            doc.close()
+            print("✅ PyMuPDF (fitz) is available")
+            return True
         except Exception as e:
-            print(f"❌ Cannot connect to Ollama: {e}")
-            print("💡 Make sure Ollama is running: ollama serve")
+            print(f"❌ PyMuPDF not found: {e}")
+            print("💡 Install with: pip install PyMuPDF")
+            return False
     
-    def generate_response(self, prompt: str, temperature: float = 0.3, max_tokens: int = 800) -> str:
-        """Generate response using local Ollama model with optimized settings"""
+    def extract_text_from_pdf(self, pdf_path: str) -> Dict:
+        """Extract text and metadata from PDF"""
         try:
-            # Optimized payload for faster responses
-            payload = {
-                "model": self.model_name,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": temperature,
-                    "num_predict": max_tokens,
-                    "top_k": 20,
-                    "top_p": 0.8,
-                    "repeat_penalty": 1.1,
-                    "num_ctx": 2048  # Reduce context window for speed
-                }
+            print(f"📖 Processing PDF: {os.path.basename(pdf_path)}")
+            
+            doc = fitz.open(pdf_path)
+            
+            # Get document metadata
+            metadata = doc.metadata
+            page_count = len(doc)
+            
+            print(f"   Pages: {page_count}")
+            print(f"   Title: {metadata.get('title', 'N/A')}")
+            print(f"   Author: {metadata.get('author', 'N/A')}")
+            
+            # Extract text from all pages
+            full_text = ""
+            pages_data = []
+            total_images = 0
+            
+            for page_num in range(page_count):
+                page = doc[page_num]
+                page_text = page.get_text()
+                
+                # Extract images from this page
+                page_images = self._extract_images_from_page(page, pdf_path, page_num + 1)
+                total_images += len(page_images)
+                
+                pages_data.append({
+                    'page_number': page_num + 1,
+                    'text': page_text,
+                    'char_count': len(page_text),
+                    'images': page_images
+                })
+                
+                full_text += f"\n--- Page {page_num + 1} ---\n{page_text}"
+            
+            doc.close()
+            
+            print(f"✅ PDF processed: {len(full_text)} characters, {total_images} images")
+            
+            return {
+                'text': full_text,
+                'pages': pages_data,
+                'metadata': metadata,
+                'page_count': page_count,
+                'char_count': len(full_text),
+                'word_count': len(full_text.split()) if full_text else 0,
+                'total_images': total_images
             }
             
-            print(f"🤔 Generating response with {self.model_name}...")
-            start_time = time.time()
-            
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=payload,
-                timeout=180  # Increased timeout to 3 minutes
-            )
-            
-            end_time = time.time()
-            
-            if response.status_code == 200:
-                result = response.json()
-                generated_text = result.get('response', '').strip()
-                
-                # Get generation stats
-                total_duration = result.get('total_duration', 0) / 1e9  # Convert to seconds
-                eval_count = result.get('eval_count', 0)
-                
-                print(f"✅ Response generated in {end_time - start_time:.1f}s")
-                if eval_count > 0 and total_duration > 0:
-                    print(f"📊 Tokens: {eval_count}, Speed: {eval_count/total_duration:.1f} tokens/s")
-                
-                return generated_text
-            else:
-                error_msg = f"Ollama API error: {response.status_code}"
-                print(f"❌ {error_msg}")
-                return error_msg
-        
-        except requests.exceptions.Timeout:
-            return "⏰ Request timed out. Try asking a simpler question or switch to a faster model like 'phi3:mini'."
         except Exception as e:
-            error_msg = f"Error connecting to Ollama: {str(e)}"
-            print(f"❌ {error_msg}")
-            return error_msg
+            print(f"❌ Error processing PDF {pdf_path}: {e}")
+            return {
+                'text': '',
+                'pages': [],
+                'metadata': {},
+                'page_count': 0,
+                'char_count': 0,
+                'word_count': 0,
+                'total_images': 0
+            }
     
-    def create_prompt(self, question: str, contexts: List[str], include_history: bool = False) -> str:
-        """Create an optimized prompt for faster processing"""
+    def _extract_images_from_page(self, page, pdf_path: str, page_num: int) -> List[Dict]:
+        """Extract images from a PDF page"""
+        images = []
         
-        # Limit context to most relevant chunks and shorter length
-        limited_contexts = contexts[:3]  # Only use top 3 most relevant
-        context_text = ""
-        if limited_contexts:
-            # Truncate long contexts
-            truncated_contexts = []
-            for i, ctx in enumerate(limited_contexts):
-                if len(ctx) > 500:  # Limit context length
-                    ctx = ctx[:500] + "..."
-                truncated_contexts.append(f"Context {i+1}: {ctx}")
-            context_text = "\n\n".join(truncated_contexts)
-        
-        # Shorter, more direct prompt
-        prompt_parts = []
-        prompt_parts.append("Answer the question based on the provided context. Be concise and direct. Always cite your sources with specific page numbers when available.")
-        
-        if context_text:
-            prompt_parts.append(f"Context:\n{context_text}")
-        else:
-            prompt_parts.append("No relevant context found.")
-        
-        prompt_parts.append(f"Question: {question}")
-        prompt_parts.append("Answer (include citations with page numbers):")
-        
-        return "\n".join(prompt_parts)
-    
-    def format_citations(self, response: str, metadata: List[Dict]) -> str:
-        """Format response with stronger citations"""
-        if not metadata:
-            return response
-        
-        # Create detailed citation information
-        citations = []
-        for i, meta in enumerate(metadata, 1):
-            source_name = os.path.basename(meta['source'])
-            page = meta.get('page', 1)
-            doc_type = meta.get('type', 'document')
+        try:
+            image_list = page.get_images()
             
-            if doc_type == 'pdf':
-                citation = f"[{i}] {source_name}, Page {page}"
-            elif doc_type == 'image':
-                confidence = meta.get('confidence', 0)
-                citation = f"[{i}] {source_name} (OCR, {confidence:.1f}% confidence)"
-            elif doc_type == 'audio':
-                duration = meta.get('duration')
-                if duration:
-                    citation = f"[{i}] {source_name} (Audio, {duration:.1f}s)"
-                else:
-                    citation = f"[{i}] {source_name} (Audio)"
+            for img_index, img in enumerate(image_list):
+                try:
+                    # Get image data
+                    xref = img[0]
+                    pix = fitz.Pixmap(page.parent, xref)
+                    
+                    # Skip if image is too small or has no data
+                    if pix.width < 50 or pix.height < 50:
+                        pix = None
+                        continue
+                    
+                    # Convert to PIL Image for processing
+                    if pix.n - pix.alpha < 4:  # GRAY or RGB
+                        img_data = pix.tobytes("png")
+                        img_filename = f"page_{page_num}_img_{img_index + 1}.png"
+                        
+                        # Create image info
+                        image_info = {
+                            'filename': img_filename,
+                            'page': page_num,
+                            'size': (pix.width, pix.height),
+                            'format': 'PNG',
+                            'data': base64.b64encode(img_data).decode('utf-8'),
+                            'path': f"{pdf_path}_images/{img_filename}"
+                        }
+                        
+                        images.append(image_info)
+                    
+                    pix = None  # Clean up
+                    
+                except Exception as e:
+                    print(f"⚠️ Could not extract image {img_index + 1} from page {page_num}: {e}")
+                    continue
+        
+        except Exception as e:
+            print(f"⚠️ Could not extract images from page {page_num}: {e}")
+        
+        return images
+    
+    def create_chunks(self, pdf_data: Dict, pdf_path: str, chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
+        """Create text chunks from PDF data with metadata"""
+        text = pdf_data['text']
+        pages_data = pdf_data['pages']
+        
+        if not text.strip():
+            print(f"⚠️ No text found in {os.path.basename(pdf_path)}")
+            return []
+        
+        chunks = []
+        
+        # Create chunks by pages first, then split large pages
+        for page_data in pages_data:
+            page_text = page_data['text'].strip()
+            page_num = page_data['page_number']
+            page_images = page_data['images']
+            
+            if not page_text:
+                continue
+            
+            # If page text is small enough, create single chunk
+            if len(page_text) <= chunk_size:
+                chunk = {
+                    'text': page_text,
+                    'source': pdf_path,
+                    'chunk_id': len(chunks),
+                    'type': 'pdf',
+                    'page': page_num,
+                    'char_count': len(page_text),
+                    'word_count': len(page_text.split()),
+                    'has_images': len(page_images) > 0,
+                    'images': page_images,
+                    'all_document_images': self._get_all_document_images(pdf_data)
+                }
+                chunks.append(chunk)
             else:
-                citation = f"[{i}] {source_name}"
-            
-            citations.append(citation)
-        
-        # Add citations to response
-        citation_text = "\n\n**Sources:**\n" + "\n".join(citations)
-        return response + citation_text
-    
-    def get_relevant_images(self, metadata: List[Dict]) -> List[Dict]:
-        """Extract relevant images from metadata"""
-        relevant_images = []
-        
-        for meta in metadata:
-            if meta.get('has_images', False):
-                images = meta.get('images', [])
-                for img in images:
-                    img_info = {
-                        'path': img['path'],
-                        'filename': img['filename'],
-                        'source': os.path.basename(meta['source']),
-                        'page': meta.get('page', 1),
-                        'size': img.get('size', (0, 0))
+                # Split large pages into smaller chunks
+                page_chunks = self._split_text_with_overlap(page_text, chunk_size, overlap)
+                
+                for i, chunk_text in enumerate(page_chunks):
+                    chunk = {
+                        'text': chunk_text,
+                        'source': pdf_path,
+                        'chunk_id': len(chunks),
+                        'type': 'pdf',
+                        'page': page_num,
+                        'page_chunk': i + 1,
+                        'char_count': len(chunk_text),
+                        'word_count': len(chunk_text.split()),
+                        'has_images': len(page_images) > 0 and i == 0,  # Only first chunk gets page images
+                        'images': page_images if i == 0 else [],
+                        'all_document_images': self._get_all_document_images(pdf_data)
                     }
-                    relevant_images.append(img_info)
+                    chunks.append(chunk)
         
-        return relevant_images
+        print(f"📝 Created {len(chunks)} chunks from {os.path.basename(pdf_path)}")
+        return chunks
     
-    def ask(self, question: str, k: int = 3, include_history: bool = False, temperature: float = 0.3) -> Tuple[str, List[str], List[Dict], List[Dict]]:
-        """Ask a question with optimized settings for speed"""
-        print(f"\n❓ Question: {question}")
-        
-        # Check if vector store has documents
-        if not hasattr(self.vector_store, 'index') or self.vector_store.index is None or self.vector_store.index.ntotal == 0:
-            return "❌ No documents available. Please upload and process some documents first.", [], [], []
-        
-        # Retrieve fewer contexts for faster processing
-        contexts, metadata = self.vector_store.search(question, k)
-        
-        if not contexts:
-            response = "I don't have any relevant documents to answer this question. Please add some documents to the knowledge base first."
-            return response, [], [], []
-        
-        # Generate response with optimized prompt
-        prompt = self.create_prompt(question, contexts, include_history)
-        response = self.generate_response(prompt, temperature, max_tokens=500)  # Shorter responses
-        
-        # Format response with stronger citations
-        response = self.format_citations(response, metadata)
-        
-        # Extract sources
-        sources = [meta['source'] for meta in metadata]
-        unique_sources = list(dict.fromkeys(sources))  # Remove duplicates while preserving order
-        
-        # Get relevant images
-        relevant_images = self.get_relevant_images(metadata)
-        
-        # Add to conversation history
-        self.conversation_history.append({
-            'question': question,
-            'answer': response,
-            'sources': unique_sources,
-            'context_count': len(contexts),
-            'images': relevant_images
-        })
-        
-        # Keep only last 5 conversations in history (reduced from 10)
-        if len(self.conversation_history) > 5:
-            self.conversation_history = self.conversation_history[-5:]
-        
-        print(f"✅ Answer generated using {len(contexts)} context chunks from {len(unique_sources)} sources")
-        if relevant_images:
-            print(f"🖼️ Found {len(relevant_images)} relevant images")
-        
-        return response, unique_sources, metadata, relevant_images
+    def _get_all_document_images(self, pdf_data: Dict) -> List[Dict]:
+        """Get all images from the entire document"""
+        all_images = []
+        for page_data in pdf_data['pages']:
+            all_images.extend(page_data['images'])
+        return all_images
     
-    def quick_ask(self, question: str) -> str:
-        """Ultra-fast question answering with minimal context"""
-        contexts, metadata = self.vector_store.search(question, k=1)  # Only 1 context
+    def _split_text_with_overlap(self, text: str, chunk_size: int, overlap: int) -> List[str]:
+        """Split text into overlapping chunks"""
+        if len(text) <= chunk_size:
+            return [text]
         
-        if not contexts:
-            return "No relevant information found."
+        chunks = []
+        start = 0
         
-        # Ultra-simple prompt
-        prompt = f"Context: {contexts[0][:300]}...\nQuestion: {question}\nBrief answer:"
+        while start < len(text):
+            end = start + chunk_size
+            
+            # If this is not the last chunk, try to break at a sentence or word boundary
+            if end < len(text):
+                # Look for sentence endings
+                sentence_endings = ['. ', '! ', '? ', '.\n', '!\n', '?\n']
+                best_break = -1
+                
+                for i in range(end - 100, end):  # Look back up to 100 chars
+                    if i > start and any(text[i:i+2] == ending for ending in sentence_endings):
+                        best_break = i + 1
+                        break
+                
+                # If no sentence break found, look for word boundary
+                if best_break == -1:
+                    for i in range(end - 50, end):  # Look back up to 50 chars
+                        if i > start and text[i] == ' ':
+                            best_break = i
+                            break
+                
+                if best_break != -1:
+                    end = best_break
+            
+            chunk_text = text[start:end].strip()
+            if chunk_text:
+                chunks.append(chunk_text)
+            
+            # Move start position with overlap
+            start = end - overlap
+            if start >= len(text):
+                break
         
-        return self.generate_response(prompt, temperature=0.1, max_tokens=200)
+        return chunks
     
-    def clear_history(self):
-        """Clear conversation history"""
-        self.conversation_history = []
-        print("🗑️  Conversation history cleared")
+    def process_pdf(self, pdf_path: str, chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
+        """Process a single PDF file"""
+        if not os.path.exists(pdf_path):
+            print(f"❌ PDF file not found: {pdf_path}")
+            return []
+        
+        if not pdf_path.lower().endswith('.pdf'):
+            print(f"❌ Not a PDF file: {pdf_path}")
+            return []
+        
+        # Extract text and metadata
+        pdf_data = self.extract_text_from_pdf(pdf_path)
+        
+        if pdf_data['text']:
+            return self.create_chunks(pdf_data, pdf_path, chunk_size, overlap)
+        else:
+            print(f"❌ No text extracted from {os.path.basename(pdf_path)}")
+            return []
     
-    def get_history(self) -> List[Dict]:
-        """Get conversation history"""
-        return self.conversation_history.copy()
+    def process_all_pdfs(self, pdf_directory: str, chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
+        """Process all PDF files in a directory"""
+        all_chunks = []
+        
+        pdf_files = [f for f in os.listdir(pdf_directory) if f.lower().endswith('.pdf')]
+        
+        if not pdf_files:
+            print(f"⚠️ No PDF files found in {pdf_directory}")
+            return all_chunks
+        
+        print(f"📚 Found {len(pdf_files)} PDF files to process")
+        
+        # Track processing statistics
+        total_pages = 0
+        total_images = 0
+        total_words = 0
+        successful_pdfs = 0
+        
+        for pdf_file in pdf_files:
+            pdf_path = os.path.join(pdf_directory, pdf_file)
+            print(f"\n📁 Processing {pdf_file}")
+            
+            chunks = self.process_pdf(pdf_path, chunk_size, overlap)
+            
+            if chunks:
+                successful_pdfs += 1
+                # Get stats from first chunk (contains document metadata)
+                if chunks[0].get('all_document_images'):
+                    total_images += len(chunks[0]['all_document_images'])
+                
+                file_words = sum(chunk['word_count'] for chunk in chunks)
+                total_words += file_words
+                
+                # Count unique pages
+                unique_pages = len(set(chunk['page'] for chunk in chunks))
+                total_pages += unique_pages
+                
+                print(f"✅ Success: {len(chunks)} chunks, {file_words} words, {unique_pages} pages")
+            else:
+                print(f"❌ Failed to process {pdf_file}")
+            
+            all_chunks.extend(chunks)
+        
+        # Print summary
+        print(f"\n📊 Processing Summary:")
+        print(f"   📁 PDFs processed: {successful_pdfs}/{len(pdf_files)}")
+        print(f"   📝 Total chunks: {len(all_chunks)}")
+        print(f"   📖 Total words: {total_words}")
+        print(f"   📄 Total pages: {total_pages}")
+        print(f"   🖼️ Total images: {total_images}")
+        
+        return all_chunks
     
-    def set_model(self, model_name: str):
-        """Change the model being used"""
-        old_model = self.model_name
-        self.model_name = model_name
-        print(f"🔄 Model changed from {old_model} to {model_name}")
-        self._test_connection()
+    def get_pdf_info(self, pdf_path: str) -> Dict:
+        """Get basic information about a PDF file"""
+        try:
+            doc = fitz.open(pdf_path)
+            metadata = doc.metadata
+            page_count = len(doc)
+            
+            # Calculate file size
+            file_size = os.path.getsize(pdf_path)
+            
+            info = {
+                'filename': os.path.basename(pdf_path),
+                'page_count': page_count,
+                'file_size': file_size,
+                'title': metadata.get('title', ''),
+                'author': metadata.get('author', ''),
+                'subject': metadata.get('subject', ''),
+                'creator': metadata.get('creator', ''),
+                'producer': metadata.get('producer', ''),
+                'creation_date': metadata.get('creationDate', ''),
+                'modification_date': metadata.get('modDate', '')
+            }
+            
+            doc.close()
+            return info
+            
+        except Exception as e:
+            print(f"❌ Error getting PDF info for {pdf_path}: {e}")
+            return {}
 
-# Test the optimized QA chain
+# Test the document processor
 if __name__ == "__main__":
-    print("🧪 Testing Optimized QA Chain...")
-    print("💡 This version is optimized for speed with:")
-    print("   • Reduced context size")
-    print("   • Faster model parameters") 
-    print("   • Shorter responses")
-    print("   • Increased timeout handling")
+    print("🧪 Testing Document Processor...")
+    
+    processor = DocumentProcessor()
+    
+    # Test with data/pdfs directory
+    pdf_dir = "../data/pdfs"
+    if os.path.exists(pdf_dir):
+        chunks = processor.process_all_pdfs(pdf_dir)
+        print(f"📊 Result: {len(chunks)} chunks created")
+        
+        if chunks:
+            print("\n📝 Sample chunk:")
+            sample = chunks[0]
+            print(f"Source: {os.path.basename(sample['source'])}")
+            print(f"Type: {sample['type']}")
+            print(f"Page: {sample['page']}")
+            print(f"Words: {sample['word_count']}")
+            print(f"Has images: {sample['has_images']}")
+            print(f"Text preview: {sample['text'][:200]}...")
+        else:
+            print("💡 No text found in PDFs. Try adding PDFs with text content.")
+    else:
+        print(f"📁 Directory {pdf_dir} not found. Add some PDFs to test!")
+        print("💡 Supported formats: .pdf")
