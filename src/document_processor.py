@@ -2,6 +2,7 @@
 import fitz  # PyMuPDF
 from typing import List, Dict, Optional
 import os
+from pathlib import Path
 import hashlib
 import base64
 from io import BytesIO
