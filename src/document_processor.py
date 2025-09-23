@@ -95,6 +95,10 @@ class DocumentProcessor:
         """Extract images from a PDF page"""
         images = []
         
+        # Create images directory if it doesn't exist
+        images_dir = Path(pdf_path).parent / "extracted_images" / Path(pdf_path).stem
+        images_dir.mkdir(parents=True, exist_ok=True)
+        
         try:
             image_list = page.get_images()
             
@@ -113,6 +117,14 @@ class DocumentProcessor:
                     if pix.n - pix.alpha < 4:  # GRAY or RGB
                         img_data = pix.tobytes("png")
                         img_filename = f"page_{page_num}_img_{img_index + 1}.png"
+                        img_file_path = images_dir / img_filename
+                        
+                        # Save image to disk for display
+                        with open(img_file_path, "wb") as img_file:
+                            img_file.write(img_data)
+                        
+                        # Extract text from image using OCR for context
+                        context_text = self._extract_image_text(img_file_path)
                         
                         # Create image info
                         image_info = {
@@ -121,7 +133,9 @@ class DocumentProcessor:
                             'size': (pix.width, pix.height),
                             'format': 'PNG',
                             'data': base64.b64encode(img_data).decode('utf-8'),
-                            'path': f"{pdf_path}_images/{img_filename}"
+                            'path': str(img_file_path),
+                            'context_text': context_text,
+                            'file_size': len(img_data)
                         }
                         
                         images.append(image_info)
@@ -136,6 +150,24 @@ class DocumentProcessor:
             print(f"⚠️ Could not extract images from page {page_num}: {e}")
         
         return images
+    
+    def _extract_image_text(self, image_path: Path) -> str:
+        """Extract text from image for context using OCR"""
+        try:
+            from PIL import Image
+            import pytesseract
+            
+            with Image.open(image_path) as img:
+                # Convert to RGB if necessary
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # Extract text with basic OCR
+                text = pytesseract.image_to_string(img, config='--psm 6')
+                return text.strip()
+        except Exception as e:
+            print(f"⚠️ Could not extract text from image {image_path}: {e}")
+            return ""
     
     def create_chunks(self, pdf_data: Dict, pdf_path: str, chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
         """Create text chunks from PDF data with metadata"""
@@ -169,7 +201,8 @@ class DocumentProcessor:
                     'word_count': len(page_text.split()),
                     'has_images': len(page_images) > 0,
                     'images': page_images,
-                    'all_document_images': self._get_all_document_images(pdf_data)
+                    'all_document_images': self._get_all_document_images(pdf_data),
+                    'pdf_metadata': pdf_data['metadata']
                 }
                 chunks.append(chunk)
             else:
@@ -188,7 +221,8 @@ class DocumentProcessor:
                         'word_count': len(chunk_text.split()),
                         'has_images': len(page_images) > 0 and i == 0,  # Only first chunk gets page images
                         'images': page_images if i == 0 else [],
-                        'all_document_images': self._get_all_document_images(pdf_data)
+                        'all_document_images': self._get_all_document_images(pdf_data),
+                        'pdf_metadata': pdf_data['metadata']
                     }
                     chunks.append(chunk)
         

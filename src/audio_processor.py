@@ -395,17 +395,26 @@ class AudioProcessor:
                 'start_time': start_time,
                 'end_time': end_time,
                 'duration': end_time - start_time,
-                'formatted_time': f"{self._format_time(start_time)} - {self._format_time(end_time)}"
+                'formatted_time': f"{self._format_time(start_time)} - {self._format_time(end_time)}",
+                'timestamp_precision': 'segment'  # Indicates this has precise timing
             })
+        else:
+            chunk['timestamp_precision'] = 'approximate'
         
         # Add speaker information if available
         if speaker is not None:
             chunk['speaker'] = speaker
+            chunk['speaker_detection'] = 'automatic'
         
         # Add detailed segment information if available
         if segment_details:
             chunk['segment_count'] = len(segment_details)
-            chunk['segments'] = segment_details
+            # Store only essential segment info to reduce memory usage
+            chunk['segment_summary'] = {
+                'count': len(segment_details),
+                'avg_confidence': sum(s.get('confidence', 0.5) for s in segment_details) / len(segment_details),
+                'total_duration': sum(s.get('end', 0) - s.get('start', 0) for s in segment_details)
+            }
         
         return chunk
     

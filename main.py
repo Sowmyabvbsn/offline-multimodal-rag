@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 from datetime import datetime
 import threading
+import time
 
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -158,14 +159,26 @@ class OfflineAIAgent:
             return "❌ No documents have been processed yet. Please upload and process some documents first.", [], {}, []
         
         try:
+            start_time = time.time()
+            
             if quick_mode and hasattr(self.qa_chain, 'quick_ask'):
                 # Use ultra-fast mode for simple questions
                 response = self.qa_chain.quick_ask(question)
                 sources = ["Quick response mode - limited context"]
                 images = []
+                metadata = []
             else:
                 # Standard mode
                 response, sources, metadata, images = self.qa_chain.ask(question)
+            
+            processing_time = time.time() - start_time
+            print(f"⏱️  Total processing time: {processing_time:.2f}s")
+            
+            # Log image results
+            if images:
+                print(f"🖼️ Found {len(images)} relevant images for display")
+                for i, img in enumerate(images[:3]):  # Show first 3
+                    print(f"  {i+1}. {img['display_info']['title']} - {img['display_info']['relevance']} relevance")
             
             # Log the conversation (thread-safe)
             self.db.log_conversation(question, response, sources)

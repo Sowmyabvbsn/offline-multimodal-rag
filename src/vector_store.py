@@ -80,24 +80,40 @@ class VectorStore:
         # Generate query embedding
         query_embedding = self.embed_texts([query])
         
-        # Search
-        distances, indices = self.index.search(query_embedding.astype('float32'), min(k, self.index.ntotal))
+        # Search with more candidates for better diversity
+        search_k = min(k * 2, self.index.ntotal)  # Search more candidates
+        distances, indices = self.index.search(query_embedding.astype('float32'), search_k)
         
-        # Return results
+        # Filter and diversify results
         results = []
         result_metadata = []
+        seen_sources = set()
+        source_count = {}
         
-        print(f"📊 Found {len(indices[0])} results")
+        print(f"📊 Found {len(indices[0])} candidates, selecting best {k}")
         
         for i, idx in enumerate(indices[0]):
             if idx < len(self.documents) and idx >= 0:  # Valid index
-                results.append(self.documents[idx])
                 metadata = self.metadata[idx].copy()
                 metadata['distance'] = float(distances[0][i])
-                metadata['rank'] = i + 1
-                result_metadata.append(metadata)
+                metadata['rank'] = len(results) + 1
                 
-                print(f"  {i+1}. Source: {metadata['source']} (distance: {metadata['distance']:.3f})")
+                source = metadata['source']
+                
+                # Limit results per source for diversity (max 2 chunks per source)
+                source_count[source] = source_count.get(source, 0)
+                if source_count[source] >= 2:
+                    continue
+                
+                results.append(self.documents[idx])
+                result_metadata.append(metadata)
+                source_count[source] += 1
+                
+                print(f"  {len(results)}. Source: {os.path.basename(metadata['source'])} (distance: {metadata['distance']:.3f})")
+                
+                # Stop when we have enough results
+                if len(results) >= k:
+                    break
         
         return results, result_metadata
     

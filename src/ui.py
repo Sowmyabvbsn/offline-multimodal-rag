@@ -7,6 +7,7 @@ from typing import List, Dict, Tuple, Optional
 import base64
 from PIL import Image
 import io
+from pathlib import Path
 
 def create_file_upload_interface(agent):
     """Create file upload and processing interface"""
@@ -69,7 +70,7 @@ def create_file_upload_interface(agent):
     def ask_question(question, history, quick_mode=False):
         """Process question and return response"""
         if not question.strip():
-            return history, ""
+            return history, "", None
         
         # Get response from agent
         response, sources, metadata, images = agent.ask_question(question, quick_mode)
@@ -84,12 +85,32 @@ def create_file_upload_interface(agent):
         # Add to chat history
         history.append([question, formatted_response])
         
-        return history, ""
+        # Prepare images for display
+        image_gallery = []
+        if images:
+            for img in images:
+                try:
+                    # Try to load image from path first
+                    if os.path.exists(img['path']):
+                        image_gallery.append((img['path'], img['display_info']['title']))
+                    # Fallback to base64 data if available
+                    elif img.get('data'):
+                        # Decode base64 and save temporarily
+                        img_data = base64.b64decode(img['data'])
+                        temp_path = f"temp_img_{len(image_gallery)}.png"
+                        with open(temp_path, "wb") as f:
+                            f.write(img_data)
+                        image_gallery.append((temp_path, img['display_info']['title']))
+                except Exception as e:
+                    print(f"⚠️ Could not prepare image for display: {e}")
+                    continue
+        
+        return history, "", image_gallery
     
     def clear_chat():
         """Clear chat history"""
         agent.qa_chain.clear_history() if agent.qa_chain else None
-        return [], ""
+        return [], "", None
     
     def switch_model(model_name):
         """Switch AI model"""
@@ -109,6 +130,15 @@ def create_file_upload_interface(agent):
         }
         .chat-container {
             height: 500px !important;
+        }
+        #image-gallery {
+            border: 2px dashed #e0e0e0;
+            border-radius: 8px;
+            padding: 10px;
+        }
+        #image-gallery img {
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         """
     ) as demo:
@@ -181,6 +211,18 @@ def create_file_upload_interface(agent):
                     bubble_full_width=False
                 )
                 
+                # Image gallery for relevant images
+                image_gallery = gr.Gallery(
+                    label="📸 Relevant Images",
+                    show_label=True,
+                    elem_id="image-gallery",
+                    columns=3,
+                    rows=2,
+                    height="300px",
+                    object_fit="contain",
+                    visible=False
+                )
+                
                 with gr.Row():
                     question_input = gr.Textbox(
                         label="Ask a question",
@@ -213,7 +255,17 @@ def create_file_upload_interface(agent):
                 - **llama3**: Highest quality
                 
                 **Quick Ask**: Ultra-fast responses with minimal context
+                
+                **Image Display**: 
+                Relevant images from your documents will appear below the chat when found!
                 """)
+        
+        # Function to show/hide image gallery based on content
+        def update_image_gallery_visibility(images):
+            if images and len(images) > 0:
+                return gr.Gallery.update(visible=True, value=images)
+            else:
+                return gr.Gallery.update(visible=False, value=[])
         
         # Event handlers
         process_btn.click(
@@ -226,24 +278,36 @@ def create_file_upload_interface(agent):
         ask_btn.click(
             fn=lambda q, h: ask_question(q, h, quick_mode=False),
             inputs=[question_input, chatbot],
-            outputs=[chatbot, question_input]
+            outputs=[chatbot, question_input, image_gallery]
+        ).then(
+            fn=update_image_gallery_visibility,
+            inputs=[image_gallery],
+            outputs=[image_gallery]
         )
         
         quick_btn.click(
             fn=lambda q, h: ask_question(q, h, quick_mode=True),
             inputs=[question_input, chatbot],
-            outputs=[chatbot, question_input]
+            outputs=[chatbot, question_input, image_gallery]
+        ).then(
+            fn=update_image_gallery_visibility,
+            inputs=[image_gallery],
+            outputs=[image_gallery]
         )
         
         question_input.submit(
             fn=lambda q, h: ask_question(q, h, quick_mode=False),
             inputs=[question_input, chatbot],
-            outputs=[chatbot, question_input]
+            outputs=[chatbot, question_input, image_gallery]
+        ).then(
+            fn=update_image_gallery_visibility,
+            inputs=[image_gallery],
+            outputs=[image_gallery]
         )
         
         clear_btn.click(
             fn=clear_chat,
-            outputs=[chatbot, question_input]
+            outputs=[chatbot, question_input, image_gallery]
         )
         
         switch_btn.click(

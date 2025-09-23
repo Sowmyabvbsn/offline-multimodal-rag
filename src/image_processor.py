@@ -109,7 +109,9 @@ class ImageProcessor:
                 'confidence': ocr_result['confidence'],
                 'word_count': ocr_result['word_count'],
                 'language': ocr_result['language'],
-                'image_size': ocr_result['image_size']
+                'image_size': ocr_result['image_size'],
+                'ocr_method': 'tesseract',
+                'processing_quality': 'high' if ocr_result['confidence'] > 70 else 'medium' if ocr_result['confidence'] > 40 else 'low'
             }
             chunks.append(chunk)
         else:
@@ -131,7 +133,9 @@ class ImageProcessor:
                             'confidence': ocr_result['confidence'],
                             'word_count': len(current_chunk.split()),
                             'language': ocr_result['language'],
-                            'image_size': ocr_result['image_size']
+                            'image_size': ocr_result['image_size'],
+                            'ocr_method': 'tesseract',
+                            'processing_quality': 'high' if ocr_result['confidence'] > 70 else 'medium' if ocr_result['confidence'] > 40 else 'low'
                         }
                         chunks.append(chunk)
                         chunk_id += 1
@@ -147,7 +151,9 @@ class ImageProcessor:
                     'confidence': ocr_result['confidence'],
                     'word_count': len(current_chunk.split()),
                     'language': ocr_result['language'],
-                    'image_size': ocr_result['image_size']
+                    'image_size': ocr_result['image_size'],
+                    'ocr_method': 'tesseract',
+                    'processing_quality': 'high' if ocr_result['confidence'] > 70 else 'medium' if ocr_result['confidence'] > 40 else 'low'
                 }
                 chunks.append(chunk)
         
