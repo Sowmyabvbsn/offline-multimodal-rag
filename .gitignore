@@ -1,16 +1,16 @@
-# Virtual environment
+
 offline_ai_env/
 venv/
 env/
 .env
 
-# Model files (too large for git)
+
 models/
 *.bin
 *.safetensors
 *.onnx
 
-# Data files (user content)
+
 data/
 logs/
 *.db
