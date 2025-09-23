@@ -51,11 +51,28 @@ class DocumentProcessor:
             
             for page_num in range(page_count):
                 page = doc[page_num]
+                # Try multiple text extraction methods
                 page_text = page.get_text()
+                
+                # If no text found, try different extraction methods
+                if not page_text.strip():
+                    # Try extracting text blocks
+                    text_blocks = page.get_text("blocks")
+                    page_text = " ".join([block[4] for block in text_blocks if len(block) > 4])
+                
+                # If still no text, try extracting from text dict
+                if not page_text.strip():
+                    text_dict = page.get_text("dict")
+                    page_text = self._extract_text_from_dict(text_dict)
+                
+                print(f"   Page {page_num + 1}: {len(page_text)} characters extracted")
                 
                 # Extract images from this page
                 page_images = self._extract_images_from_page(page, pdf_path, page_num + 1)
                 total_images += len(page_images)
+                
+                if len(page_images) > 0:
+                    print(f"   Page {page_num + 1}: {len(page_images)} images found")
                 
                 pages_data.append({
                     'page_number': page_num + 1,
@@ -69,6 +86,13 @@ class DocumentProcessor:
             doc.close()
             
             print(f"✅ PDF processed: {len(full_text)} characters, {total_images} images")
+            
+            # Debug: Show sample of extracted text
+            if full_text.strip():
+                sample_text = full_text.strip()[:200]
+                print(f"📄 Sample text: '{sample_text}...'")
+            else:
+                print("⚠️ No text was extracted from any page!")
             
             return {
                 'text': full_text,
@@ -152,6 +176,28 @@ class DocumentProcessor:
         
         return images
     
+    def _extract_text_from_dict(self, text_dict: dict) -> str:
+        """Extract text from PyMuPDF text dictionary"""
+        text_content = []
+        
+        try:
+            if 'blocks' in text_dict:
+                for block in text_dict['blocks']:
+                    if 'lines' in block:
+                        for line in block['lines']:
+                            if 'spans' in line:
+                                line_text = ""
+                                for span in line['spans']:
+                                    if 'text' in span:
+                                        line_text += span['text']
+                                if line_text.strip():
+                                    text_content.append(line_text.strip())
+            
+            return " ".join(text_content)
+        except Exception as e:
+            print(f"⚠️ Error extracting text from dict: {e}")
+            return ""
+    
     def _extract_image_text(self, image_path: Path) -> str:
         """Extract text from image for context using OCR"""
         try:
@@ -179,6 +225,9 @@ class DocumentProcessor:
             print(f"⚠️ No text found in {os.path.basename(pdf_path)}")
             return []
         
+        print(f"🔍 Debug: Total text length: {len(text)} characters")
+        print(f"🔍 Debug: Number of pages with data: {len(pages_data)}")
+        
         chunks = []
         
         # Create chunks by pages first, then split large pages
@@ -187,8 +236,17 @@ class DocumentProcessor:
             page_num = page_data['page_number']
             page_images = page_data['images']
             
-            if not page_text:
+            print(f"🔍 Debug: Page {page_num} - Text length: {len(page_text)} chars")
+            
+            # Be more lenient - accept pages with minimal text or images
+            if not page_text and len(page_images) == 0:
+                print(f"⚠️ Skipping page {page_num} - no text or images")
                 continue
+            
+            # If page has no text but has images, create a minimal chunk for the images
+            if not page_text and len(page_images) > 0:
+                page_text = f"[Page {page_num} contains {len(page_images)} image(s)]"
+                print(f"📄 Created image-only chunk for page {page_num}")
             
             # If page text is small enough, create single chunk
             if len(page_text) <= chunk_size:
@@ -206,9 +264,11 @@ class DocumentProcessor:
                     'pdf_metadata': pdf_data['metadata']
                 }
                 chunks.append(chunk)
+                print(f"✅ Created chunk {len(chunks)} for page {page_num} ({len(page_text)} chars)")
             else:
                 # Split large pages into smaller chunks
                 page_chunks = self._split_text_with_overlap(page_text, chunk_size, overlap)
+                print(f"📄 Split page {page_num} into {len(page_chunks)} chunks")
                 
                 for i, chunk_text in enumerate(page_chunks):
                     chunk = {
@@ -228,6 +288,15 @@ class DocumentProcessor:
                     chunks.append(chunk)
         
         print(f"📝 Created {len(chunks)} chunks from {os.path.basename(pdf_path)}")
+        
+        # Additional debugging if no chunks were created
+        if len(chunks) == 0:
+            print(f"❌ DEBUG: No chunks created!")
+            print(f"   Total text: '{text[:200]}...' ({len(text)} chars)")
+            print(f"   Pages data: {len(pages_data)} pages")
+            for i, page_data in enumerate(pages_data[:3]):  # Show first 3 pages
+                print(f"   Page {i+1}: '{page_data['text'][:100]}...' ({len(page_data['text'])} chars)")
+        
         return chunks
     
     def _get_all_document_images(self, pdf_data: Dict) -> List[Dict]:

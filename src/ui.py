@@ -263,9 +263,9 @@ def create_file_upload_interface(agent):
         # Function to show/hide image gallery based on content
         def update_image_gallery_visibility(images):
             if images and len(images) > 0:
-                return gr.Gallery.update(visible=True, value=images)
+                return gr.update(visible=True, value=images)
             else:
-                return gr.Gallery.update(visible=False, value=[])
+                return gr.update(visible=False, value=[])
         
         # Event handlers
         process_btn.click(
@@ -319,7 +319,7 @@ def create_file_upload_interface(agent):
         # Load initial stats
         def load_initial_stats():
             stats = agent.get_stats()
-            return f"""📊 **System Stats:**
+            return f"""📊 **System Stats:** (Fresh Start)
 - 📄 PDFs: {stats['pdf_count']}
 - 🖼️ Images: {stats['img_count']}
 - 🎵 Audio: {stats['audio_count']}

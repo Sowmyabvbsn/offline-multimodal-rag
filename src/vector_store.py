@@ -7,19 +7,24 @@ from typing import List, Dict, Tuple
 import os
 
 class VectorStore:
-    def __init__(self, index_path: str, embedding_model="all-MiniLM-L6-v2"):
+    def __init__(self, index_path: str, embedding_model="all-MiniLM-L6-v2", clear_on_init=False):
         self.index_path = index_path
         self.embedding_model_name = embedding_model
         self.embedding_model = None
         self.index = None
         self.documents = []
         self.metadata = []
+        self.clear_on_init = clear_on_init
         
         print(f"🔍 Vector store initialized with path: {index_path}")
         print(f"🤖 Embedding model: {embedding_model}")
         
-        # Try to load existing index
-        self.load()
+        if clear_on_init:
+            print("🗑️ Clearing all previous sources on restart...")
+            self.clear_all_data()
+        else:
+            # Try to load existing index
+            self.load()
     
     def _load_embedding_model(self):
         """Lazy load the embedding model"""
@@ -176,6 +181,33 @@ class VectorStore:
         except Exception as e:
             print(f"⚠️  Could not load existing vector store: {e}")
             print("🆕 Will create a new vector store")
+    
+    def clear_all_data(self):
+        """Clear all stored data and remove index files"""
+        try:
+            # Clear in-memory data
+            self.index = None
+            self.documents = []
+            self.metadata = []
+            
+            # Remove index files if they exist
+            import os
+            if os.path.exists(f"{self.index_path}.faiss"):
+                os.remove(f"{self.index_path}.faiss")
+                print(f"🗑️ Removed FAISS index: {self.index_path}.faiss")
+            
+            if os.path.exists(f"{self.index_path}.pkl"):
+                os.remove(f"{self.index_path}.pkl")
+                print(f"🗑️ Removed metadata file: {self.index_path}.pkl")
+            
+            print("✅ All previous sources cleared successfully")
+            
+        except Exception as e:
+            print(f"⚠️ Error clearing data: {e}")
+            # Reset in-memory data anyway
+            self.index = None
+            self.documents = []
+            self.metadata = []
 
 # Test the vector store
 if __name__ == "__main__":

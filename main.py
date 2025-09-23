@@ -108,7 +108,7 @@ class OfflineAIAgent:
         if self.image_processor is None:
             self.image_processor = ImageProcessor()
         if self.vector_store is None:
-            self.vector_store = VectorStore(str(self.models_dir / "faiss_index"))
+            self.vector_store = VectorStore(str(self.models_dir / "faiss_index"), clear_on_init=True)
         if self.qa_chain is None:
             self.qa_chain = QAChain(self.vector_store, model_name=self.model_name)
     
