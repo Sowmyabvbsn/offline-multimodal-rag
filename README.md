@@ -1,4 +1,4 @@
-# Smart India Hackathon 2024 - Multimodal RAG System
+# Smart India Hackathon 2025 - Multimodal RAG System
 
 
 ---
