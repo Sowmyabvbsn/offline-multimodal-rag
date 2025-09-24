@@ -407,6 +407,96 @@ def main():
                 print("✅ Switched to phi3:mini successfully")
             else:
                 print("❌ Failed to switch to phi3:mini")
+
+        # OCRS Wrapper options
+        elif command == "ocr-img":
+            # Usage: python main.py ocr-img <image_file> [--img]
+            import subprocess
+            args = sys.argv[2:]
+            cmd = ["ocrs_wrapper.py"] + args
+            result = subprocess.run([sys.executable] + cmd, capture_output=True, text=True)
+            print("Output:\n", result.stdout)
+            if result.stderr:
+                print("Error:\n", result.stderr)
+
+        elif command == "ocr-pdf":
+            # Usage: python main.py ocr-pdf <pdf_file> [--json|--pdf|--output <file>]
+            import subprocess, os, shutil
+            import re
+            allowed_flags = {"--json", "--pdf", "--output"}
+            shell_meta = re.compile(r'[;|&$><`\\\n]')
+            if len(sys.argv) < 3:
+                print("Usage: python main.py ocr-pdf <pdf_file> [--json|--pdf|--output <file>]")
+                return
+            pdf_file = sys.argv[2]
+            if not (os.path.isfile(pdf_file) and pdf_file.lower().endswith('.pdf')):
+                print(f"Error: '{pdf_file}' is not a valid PDF file.")
+                return
+            pdf_file = os.path.abspath(pdf_file)
+            sanitized_args = [pdf_file]
+            i = 3
+            while i < len(sys.argv):
+                arg = sys.argv[i]
+                if shell_meta.search(arg):
+                    print(f"Error: Argument '{arg}' contains forbidden shell characters.")
+                    return
+                if arg not in allowed_flags:
+                    print(f"Error: Unknown flag '{arg}'. Allowed: {allowed_flags}")
+                    return
+                if arg == "--output":
+                    if i+1 >= len(sys.argv):
+                        print("Error: --output flag requires a filename argument.")
+                        return
+                    out_file = sys.argv[i+1]
+                    if shell_meta.search(out_file):
+                        print(f"Error: Output filename '{out_file}' contains forbidden shell characters.")
+                        return
+                    out_file = os.path.abspath(out_file)
+                    out_dir = os.path.dirname(out_file)
+                    if not (os.path.isdir(out_dir) and os.access(out_dir, os.W_OK)):
+                        print(f"Error: Output directory '{out_dir}' does not exist or is not writable.")
+                        return
+                    sanitized_args.extend([arg, out_file])
+                    i += 2
+                else:
+                    sanitized_args.append(arg)
+                    i += 1
+            # Locate ocrs_wrapper.py
+            wrapper_path = os.path.join(os.path.dirname(__file__), "ocrs_wrapper.py")
+            if not os.path.isfile(wrapper_path):
+                print(f"Error: ocrs_wrapper.py not found at {wrapper_path}")
+                return
+            cmd = [wrapper_path] + sanitized_args
+            result = subprocess.run([sys.executable] + cmd, capture_output=True, text=True)
+            print("Output:\n", result.stdout)
+            if result.stderr:
+                print("Error:\n", result.stderr)
+
+        elif command == "ocr-batch":
+            # Usage: python main.py ocr-batch <source_folder> <destination_folder>
+            import subprocess, os
+            if len(sys.argv) < 4:
+                print("Usage: python main.py ocr-batch <source_folder> <destination_folder>")
+                return
+            source_folder = sys.argv[2]
+            dest_folder = sys.argv[3]
+            if not os.path.isdir(source_folder):
+                print(f"Source folder '{source_folder}' does not exist.")
+                return
+            os.makedirs(dest_folder, exist_ok=True)
+            files = [f for f in os.listdir(source_folder) if os.path.isfile(os.path.join(source_folder, f))]
+            if not files:
+                print(f"No files found in source folder '{source_folder}'.")
+                return
+            for file in files:
+                src_path = os.path.join(source_folder, file)
+                dest_path = os.path.join(dest_folder, f"{os.path.splitext(file)[0]}.json")
+                cmd = ["ocrs_wrapper.py", src_path, "--json", "--output", dest_path]
+                print(f"Processing {src_path} -> {dest_path}")
+                result = subprocess.run([sys.executable] + cmd, capture_output=True, text=True)
+                print("Output:\n", result.stdout)
+                if result.stderr:
+                    print("Error:\n", result.stderr)
             
     else:
         print("\n🎯 Usage:")
@@ -418,8 +508,11 @@ def main():
         print("python main.py stats          - Show system statistics")
         print("python main.py switch-mistral - Switch to Mistral model")
         print("python main.py switch-phi3    - Switch to phi3:mini model")
-        print("\n⚡ Default model: phi3:mini (optimized for speed)")
-        print("💡 Switch models anytime with switch commands")
+    # print("python main.py ocr-img <image_file> --img         - Run OCR on image")
+    print("python main.py ocr-pdf <pdf_file> --json|--pdf    - Run OCR on PDF")
+    print("python main.py ocr-batch <source_folder> <destination_folder>  - Batch OCR processing (JSON output)")
+    print("\n⚡ Default model: phi3:mini (optimized for speed)")
+    print("💡 Switch models anytime with switch commands")
 
 if __name__ == "__main__":
     main()

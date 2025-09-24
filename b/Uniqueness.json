@@ -1,0 +1,50 @@
+[
+  {
+    "lines": [
+      "Q What Your Implementation Highlights",
+      "Language Choice (Rust over Python):",
+      "Rust gives compiled, low-level control with zero-cost abstractions, unlike Python",
+      "which incurs interpreter ? GIL overhead",
+      "Parallel Computing (Rayon):",
+      "Distance matrix calculation and solver algorithms are parallelized across CPU cores. In",
+      "Python, you'd typically rely on NumPy or multiprocessing (still hampered by serialization",
+      "overhead).",
+      "Memory Efficiency:",
+      "Your solver handles tens of thousands of road nodes (14k+ in prototype, 74M+ in",
+      "README benchmarks) without choking. Python would quickly become memory-bound",
+      "Execution Speed:",
+      "README shows examples:",
+      "Greedy NN In -0.02 ms",
+      "Clarke-Wright in ~1.23 ms",
+      "Multi-start in -0.23 ms",
+      "Compare this to ? naive Python VRP implementation (networkx pure loops or OR-Tools",
+      "without C++ optimizations):",
+      "Greedy VRP on 10 customers  typically 10-50 ms in Python.",
+      "Clarke-Wright on 10 customers  100-200 ms",
+      "? Performance Gain Estimate",
+      "Per algorithm call: Rust parallel implementation is ?50-200x faster than naive Python",
+      "(depending on dataset size).",
+      "Scaling to larger problems: At 1.000 customers, Python may take minutes while Rust",
+      "(with Rayon) will still solve In seconds",
+      "Memory footprint: Rust's direct data structures avoid Python's object overhead",
+      "ower memory use.",
+      "3-5x",
+      "1l Why This Matters for Your Hackathon Pitch",
+      "Most teams will say \"Python OR-Tools\". Judges know that's straightforward, but slow",
+      "You stand out because:",
+      "You've engineered for scale (parallel Rust)."
+    ],
+    "page": 1
+  },
+  {
+    "lines": [
+      "You've proven sub-second solving on real OSM datasets",
+      "You've shown classical computing isn't just \"sequential slow code\" it can be parallel,",
+      "competitive, and production-ready",
+      " Would you ike me to prepare  performance comparison table (Python naive S",
+      "Rust parallel that you can directly insert into your PP as ? visual differentiator? hat will",
+      "make the speedup very obvious to the judges"
+    ],
+    "page": 2
+  }
+]

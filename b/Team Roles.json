@@ -1,0 +1,71 @@
+[
+  {
+    "lines": [
+      "9 End-to-End eam Ro es (8 Members, Gap-",
+      "Free)",
+      "Bring real-world railway operations knowledge (precedence rules. signalling",
+      "timetable practices).",
+      "-nsure optimization logic aligns with IR standards & safety regulations",
+      "Validate feasibility of \"what-if' scenarios.",
+      "Hande compliance & regulatory judge questions",
+      "1. Domain Expert (Railway SM-+ Compliance Lead)",
+      "2, Optimization Engineer (Operations Research",
+      "Specialist)",
+      "Build mathematical models with OR-Tools (Python baseline. Rust optional for perf)",
+      "-ncode constraints: section capacity, precedence, crossing, priorities.",
+      "-nsure conflict-free feasible schedules",
+      "Add explainability/audit logic (why a train Was prioritized).",
+      "3. AI/M Engineer (Disruptions Scenario Simulations)",
+      "Implement heuristics/ML models for rapid re-optimization under disruptions (delays.",
+      "incidents, weather).",
+      "Enable scenario forecasting  what-if simulation engine",
+      "Collaborate with frontend to visualize scenario playback (before VS after optimization).",
+      "4. Backend Engineer (APls+ System Gue Testing)",
+      "Build and expose APls for:",
+      "Optimization engine,",
+      "Simulation engine,",
+      "Dashboard feeds.",
+      "Integrate with mock TMS/railway APls (since real APls may not be available)."
+    ],
+    "page": 1
+  },
+  {
+    "lines": [
+      "Develop test harnesses for stress cases (high traffic, cascading delays) ",
+      "Ensure system runs in real-time decision cycles (< few SeC updates).",
+      "5. Frontend/UI Engineer (UX + Visualization)",
+      "Design controller dashboard with:",
+      "Train precedence recommendations",
+      "Conflict alerts.",
+      "Override buttons.",
+      "Develop interactive simulation playback (train movement, delays, resolutions).",
+      "Optimize UX to be judge-friendly (clear storytelling + easy demo flow)",
+      "6. Data Engineer (Pipelines + Synthetic Data)",
+      "Prepare clean data feeds: timetables, rolling stock, train locations",
+      "Generate synthetic disruptions (fog, derailment. loco failure, heavy traffic)",
+      "-nsure consistent pipelines  optimization engine never breaks.",
+      "Provide datasets for benchmarking throughput & delay metrics",
+      "7, Systems/DevOps Engineer (Infra + KPIs)",
+      "Containerize components (Docker/K?s).",
+      "Deploy On cloud (AWS/GCP/Azure/NIC cloud) with CI/CD",
+      "Benchmark optimization loop (latency, throughput).",
+      "Build performance dashboards with KPs:",
+      "Average delay reduction,",
+      "Throughput (trains/hour),",
+      "Utilization.",
+      "8. Product/Presentation ead (Narrative+ Pitch)",
+      "Own judging criteria alignment:",
+      "Novelty, Feasibility, Scalability, UX, Sustainability.",
+      "Shape story arc:",
+      "Problem  OR/Al solution  Real-time demo Scalability roadmap"
+    ],
+    "page": 2
+  },
+  {
+    "lines": [
+      "Manage deliverables timeline, keep team on track.",
+      "Drive judges' Q&A prep (e.g., future integration with live [MS. IR-scale adoption)."
+    ],
+    "page": 3
+  }
+]
