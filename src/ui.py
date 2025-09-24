@@ -256,8 +256,7 @@ def create_file_upload_interface(agent):
                 
                 **Quick Ask**: Ultra-fast responses with minimal context
                 
-                **Image Display**: 
-                Relevant images from your documents will appear below the chat when found!
+                
                 """)
         
         # Function to show/hide image gallery based on content
